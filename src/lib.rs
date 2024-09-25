@@ -2,6 +2,7 @@ pub mod env;
 pub mod analysis;
 pub mod utils;
 pub mod classes;
+pub mod visit_timestamps;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::fs::File;

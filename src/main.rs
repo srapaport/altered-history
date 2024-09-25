@@ -1,40 +1,19 @@
 use altered_history::classes;
 use clap::Parser;
 use std::time::Instant;
+use log::LevelFilter;
+use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use log::info;
 
 fn main(){
-    // Setup a stderr logger because ProgressLogger uses the `log` crate
-    // to printout
-    stderrlog::new()
-        .verbosity(2)
-        .timestamp(stderrlog::Timestamp::Second)
-        .init()
-        .unwrap();
-
     let opts = altered_history::env::Options::parse();
-    /* let basename: String;
-    match opts.dataset.as_str(){
-        "2021" => basename = altered_history::env::BASENAME_2021.to_string(),
-        "FULL" => basename = altered_history::env::BASENAME_FULL.to_string(),
-        _ => unimplemented!(),
-    } */
-    
-    /* let graph = load_unidirectional(PathBuf::from(&basename))
-        .expect("Could not load graph")
-        .init_properties()
-        .load_properties(|properties| properties.load_maps::<GOVMPH>())
-        .expect("Could not load maps")
-        .load_properties(|properties| properties.load_timestamps())
-        .expect("Could not load timestamps")
-        .load_properties(|properties| properties.load_persons())
-        .expect("Could not load persons")
-        .load_properties(|properties| properties.load_strings())
-        .expect("Could not load strings")
-        .load_properties(|properties| properties.load_label_names())
-        .expect("Could no load label names")
-        .load_labels()
-        .expect("Could not load labels"); */
+
+    CombinedLogger::init(
+        vec![
+            TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+            WriteLogger::new(LevelFilter::Info, Config::default(), std::fs::File::create("./results/2021/new/2021-all.log").unwrap()),
+        ]
+    ).unwrap();
 
     //Main work
     let start = Instant::now();
@@ -55,11 +34,6 @@ fn main(){
     
     //Classes
     let start = Instant::now();
-
     classes::classification_all(&opts);
-
     info!("Classification complete | time elapsed: {:.2?}", start.elapsed());
-
-    // sed -r -n 's/^.* branch: (.*) \|.*\|.*$/\1/p' res.log > branch_list.log
-    // cat branch_list.log | sort -u > branch2.log
 }
