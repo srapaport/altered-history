@@ -11,6 +11,7 @@ use std::path::Path;
 use std::ffi::OsString;
 use std::io::{prelude::*, BufReader};
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::cell::Cell;
 use std::thread;
@@ -62,7 +63,7 @@ fn main(){
         },
         "2023" => todo!(),
         "FULL" => {
-            basename = env::BASENAME_FULL_2024;
+            basename = env::BASENAME_FULL;
             db_path = format!("{}/db_origin_visit",env::DATABASE_FULL);
             number_of_origins = env::ORIGINS_FULL;
             filename_res = "branches_filter_FULL.csv";
@@ -96,12 +97,20 @@ fn main(){
 
     info!("Initialization over");
 
+    let lock_file_w = Arc::new(Mutex::new(File::create(format!("./examples/{}", filename_res)).expect("Couldn't open File")));
+    let mut file_w = lock_file_w.lock().unwrap();
+    file_w
+        .write("origin;branch;status\n".as_bytes())
+        .expect(format!("couldn't write headings in file: {}", filename_res).as_str());
+    std::mem::drop(file_w);
+
     pool.install(||{
         rayon::scope(|thread| {
             for result in db.iterator(rocksdb::IteratorMode::Start){
                 match result{
                     Ok((key, value)) => {
                         thread.spawn(|_|{
+                            let lock = lock_file_w.clone();
                             let key = key;
                             let value = value;
                             count_origins.fetch_add(1, Ordering::Relaxed);
@@ -112,7 +121,7 @@ fn main(){
                             let mut sorted_snapshots = altered_history::snapshots_sorting(value);
                             debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
-                            counting_branches(sorted_snapshots, key_str, &graph);
+                            counting_branches(sorted_snapshots, key_str, lock, filename_res, &graph);
 
                             let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
                             bar.set_position(curr_nb_origins);
@@ -125,44 +134,26 @@ fn main(){
     });
     info!("Work Finished, time elapsed: {:.2?}", start.elapsed());
 
-    let branches_status = BRANCHES_STATUS_TEST.lock().unwrap();
-    let Ok(mut file_w) = File::create_new(format!("./examples/{}", filename_res))
-        else {
-            warn!("File {} already exists!", filename_res);
-            return
-        };
-    file_w
-        .write("origin;branch;status\n".as_bytes())
-        .expect(format!("couldn't write headings in file: {}", filename_res).as_str());
-    branches_status.iter().for_each(|(ori, (keep, rejected))|{
-        keep.iter().for_each(|branch|{
-            file_w
-                .write(format!("{};{};keep\n", ori, branch).as_bytes())
-                .expect(format!("couldn't write datas in file: {}", filename_res).as_str());
-        });
-        rejected.iter().for_each(|branch|{
-            file_w
-                .write(format!("{};{};rejected\n", ori, branch).as_bytes())
-                .expect(format!("couldn't write datas in file: {}", filename_res).as_str());
-        });
-    });
-    drop(file_w); // didn't end with this instruction one time
 }
 
 pub fn counting_branches<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snap_queue: VecDeque<String>,
     origin: String,
+    file_w: Arc<Mutex<File>>, 
+    filename_res: &str,
     graph: &G
 )
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
-    let mut non_snapshots = 0;
+    let mut non_snapshots = 0; 
+    let mut keep = HashSet::new();
+    let mut rejected = HashSet::new();    
     for snap_swhid in snap_queue{
         //Snapshot ID
         let swhid1 = format!("swh:1:snp:{snap_swhid}");
-        let node_id = graph.properties().node_id(swhid1.as_str()).unwrap();
+        let node_id = graph.properties().node_id(swhid1.as_str()).expect(format!("couldn't find swhid {} in full graph 2024-05", swhid1).as_str());
         if graph.properties().node_type(node_id) !=  NodeType::Snapshot{
             non_snapshots += 1;
             continue;
@@ -177,10 +168,8 @@ where
                     branch_name = String::from_utf8_lossy(
                         &(graph.properties().label_name(branch.filename_id()))
                     ).to_string();
-                    let mut branches_status = BRANCHES_STATUS_TEST.lock().unwrap();
-                    let (keep, reject) = branches_status.entry(origin.clone()).or_default();
                     if !env::RE_BRANCH.is_match(&branch_name){
-                        reject.insert(branch_name.clone());
+                        rejected.insert(branch_name.clone());
                         continue;
                     }
                     keep.insert(branch_name.clone());
@@ -191,5 +180,17 @@ where
             }
         }
     }
+    let mut file_w = file_w.lock().unwrap();
+
+    keep.iter().for_each(|branch|{
+        file_w
+            .write(format!("{};{};keep\n", origin, branch).as_bytes())
+            .expect(format!("couldn't write datas in file: {}", filename_res).as_str());
+    });
+    rejected.iter().for_each(|branch|{
+        file_w
+            .write(format!("{};{};rejected\n", origin, branch).as_bytes())
+            .expect(format!("couldn't write datas in file: {}", filename_res).as_str());
+    });
     info!("amount of swhid non snapshots: {}", non_snapshots);
 }
