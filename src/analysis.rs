@@ -136,7 +136,7 @@ pub fn focus_missing_commits_all_files_with_save(
 
     let entries = fs::read_dir(prefix.clone()).expect("can't read dir");
     let bar = ProgressBar::new((entries.count() - 1) as u64);
-    bar.set_style(ProgressStyle::with_template("{wide_bar} {eta}").unwrap());
+    bar.set_style(ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
     let count_file = AtomicUsize::new(0);
 
     pool.install(||{
@@ -401,7 +401,7 @@ pub fn load_file_results(opts: &env::Options, filename: &str) -> Option<HashSet<
                 .insert((origin, snapshot_src, branch_name, missing_commit, snapshot_dst));
         });
         
-    info!("Loading file | Time elapsed: {:.2?}", start.elapsed());
+    //info!("Loading file | Time elapsed: {:.2?}", start.elapsed());
     return Some(res);
 }
 

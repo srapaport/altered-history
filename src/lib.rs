@@ -74,13 +74,15 @@ where
     let mut swhid1 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
     //debug!("");
     //debug!("New Snapshot");
-    let mut swhid1_commits = find_all_commits_v1(&swhid1, graph).unwrap();
+    let mut set_branch_kept = HashSet::new();
+    let mut set_branch_rejected = HashSet::new();
+    let mut swhid1_commits = find_all_commits_v1(&swhid1, &mut set_branch_kept, &mut set_branch_rejected, graph).unwrap();
 
     'find_missing_commits: loop{
         let swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
         //debug!("");
         //debug!("New Snapshot");
-        let swhid2_commits = find_all_commits_v1(&swhid2, graph).unwrap();
+        let swhid2_commits = find_all_commits_v1(&swhid2, &mut set_branch_kept, &mut set_branch_rejected, graph).unwrap();
 
         let branch_missing_commits = compare_maps(&swhid1_commits, &swhid2_commits);
         if branch_missing_commits.len() > 0 {
@@ -103,6 +105,8 @@ where
             break 'find_missing_commits;
         }
     }
+    env::BRANCH_KEPT.fetch_add(set_branch_kept.len(), Ordering::Relaxed);
+    env::BRANCH_REJECTED.fetch_add(set_branch_rejected.len(), Ordering::Relaxed);
     //debug!("Current missing commits: {:?}", curr_missing_commits);
     if curr_missing_commits.len() == 0{
         return None;
@@ -111,7 +115,9 @@ where
 }
 
 pub fn find_all_commits_v1<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    snap_swhid: &String,
+    snap_swhid: &String, 
+    set_branch_kept: &mut HashSet<String>,
+    set_branch_rejected: &mut HashSet<String>,
     graph: &G
 ) -> Option<HashMap<String, HashSet<String>>>
 where
@@ -146,6 +152,11 @@ where
                 branch_name = String::from_utf8_lossy(
                     &(graph.properties().label_name(branch.filename_id()))
                 ).to_string();
+                if !env::RE_BRANCH.is_match(&branch_name){
+                    set_branch_rejected.insert(branch_name);
+                    continue;
+                }
+                set_branch_kept.insert(branch_name.clone());
             }
             else{
                 continue;
@@ -272,7 +283,7 @@ pub fn main_all_database_mpsc(opts: &env::Options){
     thread::spawn(move ||{
         let workers = num_cpus::get()/3;
 
-        let graph = load_unidirectional(PathBuf::from(basename))
+        let graph = SwhUnidirectionalGraph::new(PathBuf::from(basename))
             .expect("Could not load graph")
             .init_properties()
             .load_properties(|properties| properties.load_maps::<GOVMPH>())
@@ -287,7 +298,7 @@ pub fn main_all_database_mpsc(opts: &env::Options){
         let count_origins = AtomicUsize::new(0);
         let pool = ThreadPoolBuilder::new().num_threads(workers).build().unwrap();
         let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(ProgressStyle::with_template("{wide_bar} {eta}").unwrap());
+        bar.set_style(ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
         let start = Instant::now();
 
         pool.install(||{
@@ -325,7 +336,7 @@ pub fn main_all_database_mpsc(opts: &env::Options){
             });
         });
         bar.finish_and_clear();
-        println!("Time elapsed: {:.2?}", start.elapsed());
+        //println!("Time elapsed: {:.2?}", start.elapsed());
     });
 
     let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
@@ -385,7 +396,7 @@ pub fn main_all_database_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<S
     thread::spawn(move ||{
         let workers = num_cpus::get()/3;
 
-        let graph = load_unidirectional(PathBuf::from(basename))
+        let graph = SwhUnidirectionalGraph::new(PathBuf::from(basename))
             .expect("Could not load graph")
             .init_properties()
             .load_properties(|properties| properties.load_maps::<GOVMPH>())
@@ -400,7 +411,7 @@ pub fn main_all_database_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<S
         let count_origins = AtomicUsize::new(0);
         let pool = ThreadPoolBuilder::new().num_threads(workers).build().unwrap();
         let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(ProgressStyle::with_template("{wide_bar} {eta}").unwrap());
+        bar.set_style(ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
         let start = Instant::now();
 
         pool.install(||{
@@ -444,7 +455,7 @@ pub fn main_all_database_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<S
             });
         });
         bar.finish_and_clear();
-        println!("Time elapsed: {:.2?}", start.elapsed());
+        //println!("Time elapsed: {:.2?}", start.elapsed());
     });
 
     let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
@@ -516,7 +527,7 @@ pub fn main_targeted_origin(opts: &env::Options, ori: &str) -> Option<HashSet<(S
         info!("No missing commit in {}", ori);
         return None
     };
-    info!("Time elapsed: {:.2?}", start.elapsed());
+    //info!("Time elapsed: {:.2?}", start.elapsed());
     Some(curr_missing_commits)
 }
 
@@ -581,7 +592,7 @@ pub fn load_results(opts: &env::Options) -> Option<HashSet<String>>{
             }
         });
         
-    info!("Time elapsed: {:.2?}", start.elapsed());
+    //info!("Time elapsed: {:.2?}", start.elapsed());
     return Some(res);
 }
 

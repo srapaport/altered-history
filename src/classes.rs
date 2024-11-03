@@ -882,7 +882,7 @@ pub fn classification_all(
 
     let entries = fs::read_dir(prefix.clone()).expect("can't read dir");
     let bar = ProgressBar::new((entries.count() - 1) as u64);
-    bar.set_style(ProgressStyle::with_template("{wide_bar} {eta}").unwrap());
+    bar.set_style(ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
     let count_file = AtomicUsize::new(0);
     pool.install(||{
         rayon::scope(|thread|{
