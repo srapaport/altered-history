@@ -1,22 +1,20 @@
 use ar_row::deserialize::ArRowDeserialize;
 use ar_row_derive::ArRowDeserialize;
 use chashmap::CHashMap;
-use clap::Parser;
 use orc_rust::projection::ProjectionMask;
 use orc_rust::ArrowReaderBuilder;
-//use datafusion_orc::projection::ProjectionMask;
-//use datafusion_orc::ArrowReaderBuilder;
 use indicatif::{HumanCount, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
 use log::{debug, info};
+
+use crate::env;
 
 // Define structure
 #[derive(ArRowDeserialize, Clone, Default, Debug, PartialEq, Eq)]
@@ -29,28 +27,18 @@ struct Visit {
 
 type AllVisits = CHashMap<String, Mutex<HashMap<String, Vec<i64>>>>;
 
-#[derive(Parser)]
-struct Options {
-    /// Directory containing the orc files
-    orc_dir: PathBuf,
-    /// Expected origins in millions
-    expected_origins: usize,
-    /// Directory containing the database files
-    output_dir: PathBuf,
-}
-
-fn load_orc_files(opts: &Options) -> AllVisits {
+fn load_orc_files(opts: &env::Options) -> AllVisits {
     let start = Instant::now();
     let files = std::fs::read_dir(&opts.orc_dir)
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let all_visits = AllVisits::default();
-    let expected_origins = opts.expected_origins as u64 * 1_000_000;
+    let expected_origins = opts.expected_origins as u64;
     let bar = ProgressBar::new(expected_origins);
     bar.set_style(ProgressStyle::with_template("{wide_bar} {eta}").unwrap());
     println!("Pre-reserving memory for up to {} origins", HumanCount(expected_origins));
-    all_visits.reserve(opts.expected_origins * 1_000_000);
+    all_visits.reserve(expected_origins as usize);
     println!("Pre-reservation time: {:.2?}", start.elapsed());
     println!("Loading ORC files");
     let start = Instant::now();
@@ -119,7 +107,7 @@ fn load_orc_files(opts: &Options) -> AllVisits {
     all_visits
 }
 
-fn save_db(all_visits: AllVisits, opts: &Options) {
+fn save_db(all_visits: AllVisits, opts: &env::Options) {
     let start = Instant::now();
     println!("Saving database");
     let mut options = rocksdb::Options::default();
@@ -140,7 +128,7 @@ fn save_db(all_visits: AllVisits, opts: &Options) {
     println!("DB writing time: {:.2?}", start.elapsed());
 }
 
-pub fn retrieve_visit_timestamps(opts: &Options) {
+pub fn retrieve_visit_timestamps(opts: &env::Options) {
     stderrlog::new()
         .verbosity(2)
         .timestamp(stderrlog::Timestamp::Second)

@@ -27,6 +27,18 @@ use ar_row_derive::ArRowDeserialize;
 pub struct Options {
     /// On what dataset is the algorithm working
     pub dataset: String,
+    /// Directory containing the orc files
+    pub orc_dir: String,
+    /// Directory containing the database files
+    pub output_dir: String,
+    /// path of the compressed graph -> e.g. "./datasets/2021-03-23-popular-3k-python-graph/graph"
+    pub graph: String,
+    /// path where results are stored - no slash at the end - must exist -> e.g."./results/2023"
+    pub results: String,
+    /// amount of origins in the graph to help the bar giving the best ETA possible
+    pub expected_origins: usize, 
+    /// amount of origin with an altered history per result file
+    pub chunk: usize,
 }
 
 #[derive(ArRowDeserialize, Clone, Default, Debug, PartialEq, Eq)]
