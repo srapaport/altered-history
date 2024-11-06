@@ -36,25 +36,25 @@ fn main(){
 
     //Main work 
     println!("START");
-    // let start = Instant::now();
-    // if let Some(cp) = altered_history::load_checkpoints(&opts){
-    //     altered_history::main_all_database_mpsc_with_cp(&opts, cp);
-    // }
-    // else{
-    //     altered_history::main_all_database_mpsc(&opts);
-    // } 
-    // println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    // println!("branch kept: {} | branch rejected: {}", env::BRANCH_KEPT.load(Ordering::Relaxed), env::BRANCH_REJECTED.load(Ordering::Relaxed));
-    // info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    // info!("branch kept: {} | branch rejected: {}", env::BRANCH_KEPT.load(Ordering::Relaxed), env::BRANCH_REJECTED.load(Ordering::Relaxed));
+    let start = Instant::now();
+    if let Some(cp) = altered_history::load_checkpoint(&opts){
+        altered_history::main_all_database_mpsc_with_cp(&opts, cp);
+    }
+    else{
+        altered_history::main_all_database_mpsc(&opts);
+    } 
+    println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
+    println!("branch kept: {} | branch rejected: {}", env::BRANCH_KEPT.load(Ordering::Relaxed), env::BRANCH_REJECTED.load(Ordering::Relaxed));
+    info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
+    info!("branch kept: {} | branch rejected: {}", env::BRANCH_KEPT.load(Ordering::Relaxed), env::BRANCH_REJECTED.load(Ordering::Relaxed));
 
     //Focus
-    // let start = Instant::now();
-    // if altered_history::analysis::focus_missing_commits_all_files_with_save(&opts){
-    //     info!("Finished!");
-    // }
-    // println!("Focus complete | time elapsed: {:.2?}", start.elapsed());
-    // info!("Focus complete | time elapsed: {:.2?}", start.elapsed());
+    let start = Instant::now();
+    if altered_history::analysis::focus_missing_commits_all_files_with_save(&opts){
+        info!("Finished!");
+    }
+    println!("Focus complete | time elapsed: {:.2?}", start.elapsed());
+    info!("Focus complete | time elapsed: {:.2?}", start.elapsed());
     
     //Classes
     let start = Instant::now();

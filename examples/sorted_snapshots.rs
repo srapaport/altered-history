@@ -79,7 +79,10 @@ where
     None
 }
 
-fn retrieve_sorted_snapshots<G>(graph: &G, ori: NodeId) -> Result<Vec<(NodeId, u64)>>
+fn retrieve_sorted_snapshots<G>(
+    graph: &G,
+    ori: NodeId
+) -> Result<Vec<(NodeId, u64)>>
 where
     G: SwhLabeledForwardGraph + SwhGraphWithProperties,
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,

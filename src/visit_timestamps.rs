@@ -1,9 +1,9 @@
 use ar_row::deserialize::ArRowDeserialize;
 use ar_row_derive::ArRowDeserialize;
 use chashmap::CHashMap;
+use indicatif::{HumanCount, ProgressBar, ProgressStyle};
 use orc_rust::projection::ProjectionMask;
 use orc_rust::ArrowReaderBuilder;
-use indicatif::{HumanCount, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -37,7 +37,10 @@ fn load_orc_files(opts: &env::Options) -> AllVisits {
     let expected_origins = opts.expected_origins as u64;
     let bar = ProgressBar::new(expected_origins);
     bar.set_style(ProgressStyle::with_template("{wide_bar} {eta}").unwrap());
-    println!("Pre-reserving memory for up to {} origins", HumanCount(expected_origins));
+    println!(
+        "Pre-reserving memory for up to {} origins",
+        HumanCount(expected_origins)
+    );
     all_visits.reserve(expected_origins as usize);
     println!("Pre-reservation time: {:.2?}", start.elapsed());
     println!("Loading ORC files");
@@ -46,7 +49,15 @@ fn load_orc_files(opts: &env::Options) -> AllVisits {
     let count_visits = AtomicUsize::new(0);
     files.into_par_iter().for_each(|dir_entry| {
         let orc_path = dir_entry.path();
-        info!("orc_path : {}", orc_path.file_name().unwrap().to_os_string().into_string().unwrap());
+        info!(
+            "orc_path : {}",
+            orc_path
+                .file_name()
+                .unwrap()
+                .to_os_string()
+                .into_string()
+                .unwrap()
+        );
         debug!("Extension orc OK");
         let file = File::open(dir_entry.path()).expect("could not open .orc");
         let builder = ArrowReaderBuilder::try_new(file).expect("could not make builder");

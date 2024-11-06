@@ -1,17 +1,17 @@
+use chashmap::CHashMap;
+use clap::Parser;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
-use std::fmt;
-use chashmap::CHashMap;
-use serde::{Serialize, Deserialize};
-use regex::Regex;
-use once_cell::sync::Lazy;
-use clap::Parser;
-use swh_graph::properties::*;
-use swh_graph::SwhGraphProperties;
 use swh_graph::graph::*;
 use swh_graph::java_compat::mph::gov::GOVMPH;
+use swh_graph::properties::*;
+use swh_graph::SwhGraphProperties;
 /* use dsi_bitstream::prelude::BigEndian;
 use webgraph::prelude::*;
 use webgraph::graphs::BVGraph;
@@ -36,7 +36,7 @@ pub struct Options {
     /// path where results are stored - no slash at the end - must exist -> e.g."./results/2023"
     pub results: String,
     /// amount of origins in the graph to help the bar giving the best ETA possible
-    pub expected_origins: usize, 
+    pub expected_origins: usize,
     /// amount of origin with an altered history per result file
     pub chunk: usize,
 }
@@ -69,10 +69,13 @@ pub struct Visits {
 
 pub type AllVisits = CHashMap<String, Mutex<HashMap<String, Vec<i64>>>>;
 
-pub const BASENAME_2021: &str = "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph";
-pub const BASENAME_2021_T: &str = "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph-transposed";
-pub const BASENAME_2023: &str = "/infres/ir800/rapaport/datasets/2023-09-06-popular-1k/compressed/graph";
-pub const BASENAME_FULL: &str = "/infres/ir800/rapaport/datasets/2023-09-06/compressed/graph"; 
+pub const BASENAME_2021: &str =
+    "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph";
+pub const BASENAME_2021_T: &str =
+    "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph-transposed";
+pub const BASENAME_2023: &str =
+    "/infres/ir800/rapaport/datasets/2023-09-06-popular-1k/compressed/graph";
+pub const BASENAME_FULL: &str = "/infres/ir800/rapaport/datasets/2023-09-06/compressed/graph";
 pub const BASENAME_FULL_2024: &str = "/poolswh/softwareheritage/graph/2024-05-16/compressed/graph";
 pub const DATABASE_2021: &str = "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-orc";
 pub const DATABASE_2023: &str = "/infres/ir800/rapaport/datasets/2023-09-06-popular-1k";
@@ -89,20 +92,24 @@ pub static RE_REL: Lazy<Regex> = Lazy::new(|| Regex::new(r"^swh:.:rel:.*$").unwr
 pub static RE_DIR: Lazy<Regex> = Lazy::new(|| Regex::new(r"^swh:.:dir:.*$").unwrap());
 pub static RE_DEV: Lazy<Regex> = Lazy::new(|| Regex::new(r".*dev.*").unwrap());
 pub static RE_MAS: Lazy<Regex> = Lazy::new(|| Regex::new(r".*master.*").unwrap());
-pub static RE_BRANCH_OLD: Lazy<Regex> = Lazy::new(|| Regex::new(r"refs\/heads\/(ma(in([^t])|ster)|dev(el(op)?)?)").unwrap());
-pub static RE_BRANCH: Lazy<Regex> = Lazy::new(|| Regex::new(r"^refs/heads/(main|master|dev|devel|develop|development)$").unwrap());
+pub static RE_BRANCH_OLD: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"refs\/heads\/(ma(in([^t])|ster)|dev(el(op)?)?)").unwrap());
+pub static RE_BRANCH: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^refs/heads/(main|master|dev|devel|develop|development)$").unwrap());
 pub static RE_CSV: Lazy<Regex> = Lazy::new(|| Regex::new(r".*\.csv$").unwrap());
 pub static RE_FILENAME_WITHOUT_EXT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(.+)\..*$").unwrap());
 pub const MAX_DEPTH: usize = 10;
 // HashMap<URL, (Branches kept, Branches excluded)>
-pub static BRANCHES_STATUS: Lazy<Mutex<HashMap<String, (HashSet<String>, HashSet<String>)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-pub static VISIT_STATUS: Lazy<Mutex<HashMap<String, usize>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+pub static BRANCHES_STATUS: Lazy<Mutex<HashMap<String, (HashSet<String>, HashSet<String>)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+pub static VISIT_STATUS: Lazy<Mutex<HashMap<String, usize>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub static BRANCH_KEPT: AtomicUsize = AtomicUsize::new(0);
 pub static BRANCH_REJECTED: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum MainCateg{
+pub enum MainCateg {
     META,
     DIR,
     LoadingIssue,
@@ -119,7 +126,7 @@ impl fmt::Display for MainCateg {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum SubCateg{
+pub enum SubCateg {
     Message,
     Author,
     Date,
@@ -156,47 +163,46 @@ impl fmt::Display for SubCateg {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Categ{
+pub struct Categ {
     pub main_categ: MainCateg,
-    pub sub_categ: HashSet<SubCateg>,//if main_categ is META then None else Some(ext)
+    pub sub_categ: HashSet<SubCateg>, //if main_categ is META then None else Some(ext)
 }
 
-pub static ORIGINS_LIST_2021: Lazy<HashSet<&str>> =
-    Lazy::new(||{
-        HashSet::from([
-            "https://github.com/ActivityWatch/activitywatch",
-            "https://github.com/AlessandroZ/LaZagne",
-            "https://github.com/apenwarr/sshuttle",
-            "https://github.com/brennerm/PyTricks",
-            "https://github.com/crazyguitar/pysheeet",
-            "https://github.com/Dman95/SASM",
-            "https://github.com/easy-tensorflow/easy-tensorflow",
-            "https://github.com/Eloston/ungoogled-chromium",
-            "https://github.com/EpistasisLab/tpot",
-            "https://github.com/formspree/formspree",
-            "https://github.com/Guake/guake",
-            "https://github.com/HIT-SCIR/ltp",
-            "https://github.com/jaungiers/LSTM-Neural-Network-for-Time-Series-Prediction",
-            "https://github.com/Jrohy/multi-v2ray",
-            "https://github.com/lazyprogrammer/machine_learning_examples",
-            "https://github.com/linkedin/qark",
-            "https://github.com/metabrainz/picard",
-            "https://github.com/miguelgrinberg/microblog",
-            "https://github.com/mininet/mininet",
-            "https://github.com/misterch0c/shadowbroker",
-            "https://github.com/momosecurity/aswan",
-            "https://github.com/MycroftAI/mycroft-core",
-            "https://github.com/n1nj4sec/pupy",
-            "https://github.com/PaddlePaddle/Paddle",
-            "https://github.com/python/cpython",
-            "https://github.com/scikit-learn-contrib/imbalanced-learn",
-            "https://github.com/scrapinghub/portia",
-            "https://github.com/SpiderLabs/Responder",
-            "https://github.com/stanfordnlp/stanza",
-            "https://github.com/StevenBlack/hosts",
-            "https://github.com/Tribler/tribler",
-            "https://github.com/Yorko/mlcourse.ai",
-            "https://gitlab.com/EAVISE/brambox.git",
-            "https://gitlab.com/elixire/elixire.git"
-        ])
-    });
+pub static ORIGINS_LIST_2021: Lazy<HashSet<&str>> = Lazy::new(|| {
+    HashSet::from([
+        "https://github.com/ActivityWatch/activitywatch",
+        "https://github.com/AlessandroZ/LaZagne",
+        "https://github.com/apenwarr/sshuttle",
+        "https://github.com/brennerm/PyTricks",
+        "https://github.com/crazyguitar/pysheeet",
+        "https://github.com/Dman95/SASM",
+        "https://github.com/easy-tensorflow/easy-tensorflow",
+        "https://github.com/Eloston/ungoogled-chromium",
+        "https://github.com/EpistasisLab/tpot",
+        "https://github.com/formspree/formspree",
+        "https://github.com/Guake/guake",
+        "https://github.com/HIT-SCIR/ltp",
+        "https://github.com/jaungiers/LSTM-Neural-Network-for-Time-Series-Prediction",
+        "https://github.com/Jrohy/multi-v2ray",
+        "https://github.com/lazyprogrammer/machine_learning_examples",
+        "https://github.com/linkedin/qark",
+        "https://github.com/metabrainz/picard",
+        "https://github.com/miguelgrinberg/microblog",
+        "https://github.com/mininet/mininet",
+        "https://github.com/misterch0c/shadowbroker",
+        "https://github.com/momosecurity/aswan",
+        "https://github.com/MycroftAI/mycroft-core",
+        "https://github.com/n1nj4sec/pupy",
+        "https://github.com/PaddlePaddle/Paddle",
+        "https://github.com/python/cpython",
+        "https://github.com/scikit-learn-contrib/imbalanced-learn",
+        "https://github.com/scrapinghub/portia",
+        "https://github.com/SpiderLabs/Responder",
+        "https://github.com/stanfordnlp/stanza",
+        "https://github.com/StevenBlack/hosts",
+        "https://github.com/Tribler/tribler",
+        "https://github.com/Yorko/mlcourse.ai",
+        "https://gitlab.com/EAVISE/brambox.git",
+        "https://gitlab.com/elixire/elixire.git",
+    ])
+});
