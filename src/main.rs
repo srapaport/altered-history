@@ -2,8 +2,7 @@ use altered_history::classes;
 use altered_history::env;
 use clap::Parser;
 use std::time::Instant;
-use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
-use flexi_logger::{Logger, LogSpecBuilder, Criterion, Naming, Cleanup, Duplicate};
+use flexi_logger::{Logger, Criterion, Naming, Cleanup, Duplicate};
 use std::sync::atomic::Ordering;
 use log::LevelFilter;
 use log::info;
@@ -27,13 +26,6 @@ fn main(){
         .start()
         .unwrap();
 
-    // CombinedLogger::init(
-    //     vec![
-    //         TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
-    //         WriteLogger::new(LevelFilter::Info, Config::default(), std::fs::File::create("/infres/ir800/rapaport/results/FULL_new/logs/FULL-all.log").unwrap()),
-    //     ]
-    // ).unwrap();
-
     //Main work 
     println!("START");
     let start = Instant::now();
@@ -44,9 +36,9 @@ fn main(){
         altered_history::main_all_database_mpsc(&opts);
     } 
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    println!("branch kept: {} | branch rejected: {}", env::BRANCH_KEPT.load(Ordering::Relaxed), env::BRANCH_REJECTED.load(Ordering::Relaxed));
+    println!("branch kept: {} | branch rejected: {}", env::BRANCHES_KEPT.load(Ordering::Relaxed), env::BRANCHES_REJECTED.load(Ordering::Relaxed));
     info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    info!("branch kept: {} | branch rejected: {}", env::BRANCH_KEPT.load(Ordering::Relaxed), env::BRANCH_REJECTED.load(Ordering::Relaxed));
+    info!("branch kept: {} | branch rejected: {}", env::BRANCHES_KEPT.load(Ordering::Relaxed), env::BRANCHES_REJECTED.load(Ordering::Relaxed));
 
     //Focus
     let start = Instant::now();

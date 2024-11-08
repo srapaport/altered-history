@@ -1,12 +1,7 @@
 use crate::analysis;
 use crate::env;
-use ar_row::deserialize::ArRowDeserialize;
-use ar_row_derive::ArRowDeserialize;
-use indicatif::{HumanCount, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
-use orc_rust::projection::ProjectionMask;
-use orc_rust::ArrowReaderBuilder;
-use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
@@ -15,14 +10,13 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
-use swh_graph::graph::*;
 use swh_graph::graph::*;
 use swh_graph::java_compat::mph::gov::GOVMPH;
 use swh_graph::labels::EdgeLabel;
 use swh_graph::NodeType;
 
-pub fn get_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+/// returns the (node id, swhid) of the root directory of the given commit
+fn get_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     rev_swhid: &str,
     graph: &G,
 ) -> Option<(usize, String)>
@@ -32,8 +26,8 @@ where
 {
     let node_id = graph.properties().node_id(rev_swhid).unwrap();
     for succ in graph.successors(node_id) {
-        let succ_swhid = graph.properties().swhid(succ).to_string();
-        if env::RE_DIR.is_match(&succ_swhid) {
+        if graph.properties().node_type(succ) == NodeType::Directory{
+            let succ_swhid = graph.properties().swhid(succ).to_string();
             return Some((succ, succ_swhid));
         }
     }
@@ -41,8 +35,8 @@ where
     None
 }
 
-pub fn is_dir_in_snapshot<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    //swhid_dir: String,
+/// returns the node that contains the given directory in the given snapshot if any
+fn is_dir_in_snapshot<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     id_dir: usize,
     snap_swhid: &str,
     graph: &G,
@@ -55,7 +49,6 @@ where
     let mut to_visit = Vec::new();
     to_visit.push(node_snap);
     let mut visited = HashSet::new();
-    //debug!("dir swhid: {}", swhid_dir);
     while let Some(node) = to_visit.pop() {
         if visited.contains(&node) {
             continue;
@@ -64,9 +57,6 @@ where
         let successors = graph.successors(node);
 
         for succ in successors {
-            //debug!("succ: {}", succ);
-            //let swhid_succ = graph.properties().swhid(succ).to_string();
-            //if swhid_succ == swhid_dir{
             if id_dir == succ {
                 let swhid_parent = graph.properties().swhid(node).to_string();
                 return Some((node, swhid_parent));
@@ -77,7 +67,8 @@ where
     None
 }
 
-pub fn get_list_of_content<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+/// return the list of all the content node id associated with their path in the given dir
+fn get_list_of_content<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     dir: usize,
     graph: &G,
 ) -> HashMap<String, usize>
@@ -105,7 +96,7 @@ where
         for (succ, labels) in successors {
             //code duplication, to change when possible
             for label in labels {
-                let mut name: String;
+                let name: String;
                 if let EdgeLabel::DirEntry(dir) = label {
                     name =
                         String::from_utf8_lossy(&graph.properties().label_name(dir.filename_id()))
@@ -113,8 +104,6 @@ where
                 } else {
                     continue;
                 }
-                /* let bytes = &graph.properties().label_name(label.filename_id());
-                let mut name = String::from_utf8_lossy(bytes); */
                 let path = format!(
                     "{}/{}",
                     path_node
@@ -138,7 +127,7 @@ where
     res
 }
 
-pub fn compare_dir(
+fn compare_dir(
     dir_src: &HashMap<String, usize>,
     dir_dst: &HashMap<String, usize>,
 ) -> HashMap<(String, usize), Option<env::SubCateg>> {
@@ -152,21 +141,21 @@ pub fn compare_dir(
                 } else {
                     res.insert(
                         (path.to_owned(), cnt_id.to_owned()),
-                        Some(env::SubCateg::ContentModified),
+                        Some(env::SubCateg::FileModified),
                     );
                 }
             }
             None => {
                 res.insert(
                     (path.to_owned(), cnt_id.to_owned()),
-                    Some(env::SubCateg::ContentRemoved),
+                    Some(env::SubCateg::FileRemoved),
                 );
             }
         });
     res
 }
 
-pub fn update_changes(
+fn update_changes(
     map: &mut HashMap<(String, usize), Option<env::SubCateg>>,
     changes: HashMap<(String, usize), Option<env::SubCateg>>,
 ) {
@@ -176,13 +165,13 @@ pub fn update_changes(
                 match opt {
                     Some(cat) => {
                         match cat {
-                            env::SubCateg::ContentRemoved => {
+                            env::SubCateg::FileRemoved => {
                                 map.insert(key, categ);
                             }
-                            env::SubCateg::ContentModified => {
+                            env::SubCateg::FileModified => {
                                 match categ {
                                     None => {
-                                        map.insert(key, categ); //We modify ContentModified into None because we found the content as it was in a revision
+                                        map.insert(key, categ); //We modify FileModified into None because we found the content as it was in a revision
                                     }
                                     Some(_) => (), //if the content is removed or modified we don't change it
                                 }
@@ -200,7 +189,8 @@ pub fn update_changes(
     });
 }
 
-pub fn meta_changes<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+/// Classify the meta changes in the missing commit
+fn meta_changes<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     missing_commit: &str,
     first_difference: usize,
     graph: &G,
@@ -220,7 +210,7 @@ where
         .properties()
         .node_id(missing_commit)
         .expect("couldn't find node id");
-    //diffs
+
     if message_diff(missing_commit, first_difference, graph) {
         categ.sub_categ.insert(env::SubCateg::Message);
     }
@@ -236,12 +226,6 @@ where
     if committer_date_diff(missing_commit, first_difference, graph) {
         categ.sub_categ.insert(env::SubCateg::CommitterDate);
     }
-    /* if date_offset_diff(missing_commit, first_difference, graph){
-        categ.sub_categ.insert(env::SubCateg::DateOffset);
-    }
-    if committer_offset_diff(missing_commit, first_difference, graph){
-        categ.sub_categ.insert(env::SubCateg::CommitterOffset);
-    } */
     categ
 }
 
@@ -362,145 +346,7 @@ where
     false
 }
 
-/* fn date_offset_diff<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    missing_commit: usize,
-    first_difference: usize,
-    graph: &G
-) -> bool
-where
-    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
-    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
-{
-    let date_offset_md = graph.properties().author_timestamp_offset(missing_commit);
-    let date_offset_fd = graph.properties().author_timestamp_offset(first_difference);
-    if let Some(date_offset) = date_offset_md{
-        if let Some(date_offset2) = date_offset_fd{
-            return date_offset != date_offset2;
-        }
-        return true;
-    }
-    if let Some(_) = date_offset_fd{
-        return true;
-    }
-    false
-} */
-
-/* fn committer_offset_diff<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    missing_commit: usize,
-    first_difference: usize,
-    graph: &G
-) -> bool
-where
-    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
-    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
-{
-    let committer_offset_md = graph.properties().committer_timestamp_offset(missing_commit);
-    let committer_offset_fd = graph.properties().committer_timestamp_offset(first_difference);
-    if let Some(committer_offset) = committer_offset_md{
-        if let Some(committer_offset2) = committer_offset_fd{
-            return committer_offset != committer_offset2;
-        }
-        return true;
-    }
-    if let Some(_) = committer_offset_fd{
-        return true;
-    }
-    false
-} */
-
-pub fn get_list_of_changes(
-    changes: HashMap<(String, usize), Option<env::SubCateg>>,
-) -> HashSet<env::SubCateg> {
-    let mut res: HashSet<env::SubCateg> = HashSet::new();
-    for (_, v) in changes.into_iter() {
-        if let Some(categ) = v {
-            res.insert(categ);
-        }
-        if res.len() > 1 {
-            //Meaning Modified and removed are already in there
-            return res;
-        }
-    }
-    if res.len() == 0 {
-        res.insert(env::SubCateg::ContentDiluted);
-    }
-    res
-}
-
-pub fn dir_changes<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    dir: HashMap<String, usize>,
-    snap_dst: &str,
-    branch: &str,
-    graph: &G,
-) -> Option<HashMap<(String, usize), Option<env::SubCateg>>>
-where
-    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
-    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
-    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
-    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
-    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
-{
-    let mut res = HashMap::new();
-
-    let snap_id = graph
-        .properties()
-        .node_id(snap_dst)
-        .expect(&format!("couldn't find {} in the graph", snap_dst));
-    //find the rev of the correct branch
-    let mut rev_id: Option<usize> = None;
-    'global: for (succ, labels) in graph.labeled_successors(snap_id) {
-        for label in labels {
-            let curr_branch: String;
-            if let EdgeLabel::Branch(b) = label {
-                curr_branch =
-                    String::from_utf8_lossy(&graph.properties().label_name(b.filename_id()))
-                        .to_string();
-            } else {
-                continue;
-            }
-            //let curr_branch = String::from_utf8_lossy(&graph.properties().label_name(label.filename_id())).to_string();
-            if &curr_branch == branch {
-                rev_id = Some(succ);
-                break 'global;
-            }
-        }
-    }
-    let Some(rev_id) = rev_id else {
-        return None; //all the changes are SubCateg::REMOVED --> branch disapeared
-    };
-
-    let mut to_visit = Vec::new();
-    to_visit.push(rev_id);
-    let mut visited = HashSet::new();
-    while let Some(node) = to_visit.pop() {
-        if visited.contains(&node) {
-            continue;
-        }
-        visited.insert(node);
-        let successors = graph.successors(node);
-        for succ in successors {
-            match graph.properties().node_type(succ) {
-                NodeType::Revision => {
-                    let rev_swhid = graph.properties().swhid(succ).to_string();
-                    let (rev_dir, _) = get_dir(&rev_swhid, graph)
-                        .expect(&format!("couldn't find dir for rev {}", rev_swhid));
-                    let changes = compare_dir(&dir, &get_list_of_content(rev_dir, graph));
-                    update_changes(&mut res, changes);
-                    to_visit.push(succ);
-                }
-                NodeType::Release => {
-                    to_visit.push(succ);
-                }
-                _ => (),
-            }
-        }
-    }
-    info!("full visited: {}", visited.len());
-
-    Some(res)
-}
-
-pub fn dir_changes_v2<
+fn dir_changes<
     G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph,
 >(
     dir: HashMap<String, usize>,
@@ -534,7 +380,6 @@ where
             } else {
                 continue;
             }
-            //let curr_branch = String::from_utf8_lossy(&graph_t.properties().label_name(label.filename_id())).to_string();
             if &curr_branch == branch {
                 rev_id = Some(succ);
                 break 'global;
@@ -581,14 +426,33 @@ where
         }
         None => {
             //If we have no revision to visit / to compare the missing commit to
-            res.insert((String::new(), 0), Some(env::SubCateg::ContentRemoved));
+            res.insert((String::new(), 0), Some(env::SubCateg::FileRemoved));
         }
     }
 
     Some(res)
 }
 
-pub fn find_initial_rev<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+fn get_list_of_changes(
+    changes: HashMap<(String, usize), Option<env::SubCateg>>,
+) -> HashSet<env::SubCateg> {
+    let mut res: HashSet<env::SubCateg> = HashSet::new();
+    for (_, v) in changes.into_iter() {
+        if let Some(categ) = v {
+            res.insert(categ);
+        }
+        if res.len() > 1 {
+            //Meaning Modified and removed are already in there
+            return res;
+        }
+    }
+    if res.len() == 0 {
+        res.insert(env::SubCateg::ContentSplit);
+    }
+    res
+}
+
+fn find_initial_rev<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snap_swhid: &str,
     graph: &G,
 ) -> Option<usize>
@@ -629,7 +493,7 @@ where
     None
 }
 
-pub fn find_successors<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+fn find_successors<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     rev_id: usize,
     graph: &G,
 ) -> Option<HashSet<usize>>
@@ -658,7 +522,7 @@ where
     Some(res)
 }
 
-pub fn find_revs<G: SwhLabeledBackwardGraph + SwhGraphWithProperties>(
+fn find_revs<G: SwhLabeledBackwardGraph + SwhGraphWithProperties>(
     missing_commit: usize,
     succs: HashSet<usize>,
     graph_t: &G,
@@ -721,77 +585,8 @@ where
     Some(res)
 }
 
-pub fn file_classification<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    filename: &str,
-    opts: &env::Options,
-    graph: &G,
-) -> Option<HashMap<(String, String, String, String, String, Option<String>), env::Categ>>
-where
-    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
-    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
-    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
-    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
-    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
-{
-    let mut res = HashMap::new();
-
-    let file_results = analysis::load_file_results(opts, filename)
-        .expect(&format!("couldn't load results from {}", filename));
-
-    let bar = ProgressBar::new(file_results.len() as u64);
-    bar.set_style(
-        ProgressStyle::with_template("{wide_bar} {pos} {percent_precise} {eta}").unwrap(),
-    );
-    let mut cpt_line = 0;
-    file_results.into_iter().for_each(|line| {
-        let (dir, _) = get_dir(&line.3, graph)
-            .expect(format!("Couldn't find a dir for rev {}", line.3).as_str());
-        let first_difference = is_dir_in_snapshot(dir, &line.4, graph);
-        let mut categ: env::Categ;
-        match first_difference {
-            Some((fd, fd_swhid)) => {
-                //META changes
-                if fd_swhid == line.3 {
-                    categ = env::Categ {
-                        main_categ: env::MainCateg::DIR,
-                        sub_categ: HashSet::new(),
-                    };
-                    categ.sub_categ.insert(env::SubCateg::DifferentBranchName);
-                } else {
-                    categ = meta_changes(&line.3, fd, graph);
-                }
-                res.insert(
-                    (line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)),
-                    categ,
-                );
-            }
-            None => {
-                //DIR changes
-                categ = env::Categ {
-                    main_categ: env::MainCateg::DIR,
-                    sub_categ: HashSet::new(),
-                };
-                let lc = get_list_of_content(dir, graph);
-                let changes = dir_changes(lc, &line.4, &line.2, graph);
-                match changes {
-                    Some(changes) => {
-                        categ.sub_categ = get_list_of_changes(changes);
-                    }
-                    None => {
-                        categ.sub_categ.insert(env::SubCateg::RemovedBranch);
-                    }
-                }
-                res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
-            }
-        }
-        cpt_line += 1;
-        bar.set_position(cpt_line);
-    });
-    bar.finish_and_clear();
-    return Some(res);
-}
-
-pub fn file_classification_v2<
+/// Classify all the missing commits of a file
+fn file_classification<
     G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph,
 >(
     filename: &str,
@@ -810,21 +605,16 @@ where
     let file_results = analysis::load_file_results(opts, filename)
         .expect(&format!("couldn't load results from {}", filename));
 
-    let bar = ProgressBar::new(file_results.len() as u64);
-    bar.set_style(
-        ProgressStyle::with_template("{wide_bar} {pos} {percent_precise} {eta}").unwrap(),
-    );
     let mut cpt_line = 0;
     file_results.into_iter().for_each(|line| {
-        line_classification_v2(&mut res, line, graph_t);
+        line_classification(&mut res, line, graph_t);
         cpt_line += 1;
-        bar.set_position(cpt_line);
     });
-    bar.finish_and_clear();
     return Some(res);
 }
 
-fn line_classification_v2<
+/// Classify a single missing commit
+fn line_classification<
     G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph,
 >(
     res: &mut HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
@@ -837,7 +627,6 @@ fn line_classification_v2<
     <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
     <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
 {
-    //let (dir, _) = get_dir(&line.3, graph_t).expect(format!("Couldn't find a dir for rev {}", line.3).as_str());
     let mut categ: env::Categ;
 
     if let Some((dir, _)) = get_dir(&line.3, graph_t) {
@@ -867,13 +656,13 @@ fn line_classification_v2<
                     sub_categ: HashSet::new(),
                 };
                 let lc = get_list_of_content(dir, graph_t);
-                let changes = dir_changes_v2(lc, &line.3, &line.4, &line.2, graph_t);
+                let changes = dir_changes(lc, &line.3, &line.4, &line.2, graph_t);
                 match changes {
                     Some(changes) => {
                         categ.sub_categ = get_list_of_changes(changes);
                     }
                     None => {
-                        categ.sub_categ.insert(env::SubCateg::RemovedBranch);
+                        categ.sub_categ.insert(env::SubCateg::RemovedBranch);//Useless, never happens
                     }
                 }
                 res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
@@ -893,26 +682,12 @@ extern "C" {
     fn gettid() -> u32;
 }
 
+/// Classify all altered commits from results files in focus
 pub fn classification_all(opts: &env::Options) -> bool {
-    let prefix: String;
-    let basename: String;
-    match opts.dataset.as_str() {
-        "2021" => {
-            prefix = format!("{}/focus", env::PREFIX_RESULTS_2021);
-            basename = env::BASENAME_2021.to_string();
-        }
-        "2023" => todo!(),
-        "FULL" => {
-            prefix = format!("{}/focus", env::PREFIX_RESULTS_FULL);
-            basename = env::BASENAME_FULL.to_string();
-        }
-        _ => {
-            warn!("Usage: <2021, FULL>");
-            unimplemented!()
-        }
-    }
+    let prefix: String = format!("{}/focus", opts.results);
+    let graph_name: String = opts.graph.clone();
 
-    let graph_t = load_bidirectional(PathBuf::from(basename))
+    let graph_t = SwhBidirectionalGraph::new(PathBuf::from(graph_name))
         .expect("Could not load graph")
         .init_properties()
         .load_properties(|properties| properties.load_maps::<GOVMPH>())
@@ -923,15 +698,12 @@ pub fn classification_all(opts: &env::Options) -> bool {
         .expect("Could not load persons")
         .load_properties(|properties| properties.load_strings())
         .expect("Could not load strings")
-        //.load_properties(|properties| properties.load_contents())
-        //.expect("Could not load contents")
         .load_properties(|properties| properties.load_label_names())
         .expect("Could no load label names")
         .load_labels()
         .expect("Could not load labels");
 
     let workers = num_cpus::get() / 3;
-    //let workers = 1;
     let pool = ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -977,12 +749,11 @@ pub fn classification_all(opts: &env::Options) -> bool {
                                         format!("focus/{}", filename),
                                         thread_id
                                     );
-                                    if let Some(p) = file_classification_v2(
+                                    if let Some(p) = file_classification(
                                         &format!("focus/{}", filename),
                                         opts,
                                         &graph_t,
                                     ) {
-                                        //print_categ(&p);
                                         save_categ(&filename_dst, p);
                                     }
                                 }
@@ -1000,20 +771,7 @@ pub fn classification_all(opts: &env::Options) -> bool {
     true
 }
 
-pub fn print_categ(
-    categs: &HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
-) {
-    println!("origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories");
-    categs.iter().for_each(|(line, categ)| {
-        let string_categ = format!("{};{:?}", categ.main_categ, categ.sub_categ);
-        println!(
-            "{};{};{};{};{};{:?};{}",
-            line.0, line.1, line.2, line.3, line.4, line.5, string_categ
-        );
-    });
-}
-
-pub fn save_categ(
+fn save_categ(
     filename: &str,
     map: HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
 ) {
