@@ -26,7 +26,7 @@ where
 {
     let node_id = graph.properties().node_id(rev_swhid).unwrap();
     for succ in graph.successors(node_id) {
-        if graph.properties().node_type(succ) == NodeType::Directory{
+        if graph.properties().node_type(succ) == NodeType::Directory {
             let succ_swhid = graph.properties().swhid(succ).to_string();
             return Some((succ, succ_swhid));
         }
@@ -346,9 +346,7 @@ where
     false
 }
 
-fn dir_changes<
-    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph,
->(
+fn dir_changes<G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph>(
     dir: HashMap<String, usize>,
     rev_swhid: &str,
     snap_dst: &str,
@@ -662,7 +660,7 @@ fn line_classification<
                         categ.sub_categ = get_list_of_changes(changes);
                     }
                     None => {
-                        categ.sub_categ.insert(env::SubCateg::RemovedBranch);//Useless, never happens
+                        categ.sub_categ.insert(env::SubCateg::RemovedBranch); //Useless, never happens
                     }
                 }
                 res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);

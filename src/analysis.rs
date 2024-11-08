@@ -53,7 +53,7 @@ where
 }
 
 /// save the results given in the file filename
-/// in the directory 
+/// in the directory
 /// if the directory doesn't exist, create it
 fn save_focus_commits(
     opts: &env::Options,
@@ -65,7 +65,8 @@ fn save_focus_commits(
     match fs::metadata(&prefix) {
         Ok(_) => (), //Do nothing
         Err(_) => {
-            fs::create_dir(&prefix).expect(format!("couldn't create directory: {}", &prefix).as_str());
+            fs::create_dir(&prefix)
+                .expect(format!("couldn't create directory: {}", &prefix).as_str());
         } //Create new directory
     }
     //save res in file

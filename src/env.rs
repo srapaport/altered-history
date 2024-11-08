@@ -67,7 +67,7 @@ pub enum SubCateg {
     Committer,
     CommitterDate,
     DifferentBranchName,
-    RemovedBranch,//TODO
+    RemovedBranch, //TODO
     FileModified,
     FileRemoved,
     ContentSplit,
@@ -82,7 +82,7 @@ impl fmt::Display for SubCateg {
             SubCateg::Committer => write!(f, "Committer"),
             SubCateg::CommitterDate => write!(f, "CommitterDate"),
             SubCateg::DifferentBranchName => write!(f, "DifferentBranchName"),
-            SubCateg::RemovedBranch => write!(f, "RemovedBranch"),//TODO
+            SubCateg::RemovedBranch => write!(f, "RemovedBranch"), //TODO
             SubCateg::FileModified => write!(f, "FileModified"),
             SubCateg::FileRemoved => write!(f, "FileRemoved"),
             SubCateg::ContentSplit => write!(f, "ContentSplit"),
