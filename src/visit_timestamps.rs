@@ -140,11 +140,6 @@ fn save_db(all_visits: AllVisits, opts: &env::Options) {
 }
 
 pub fn retrieve_visit_timestamps(opts: &env::Options) {
-    stderrlog::new()
-        .verbosity(2)
-        .timestamp(stderrlog::Timestamp::Second)
-        .init()
-        .unwrap();
     let start = Instant::now();
     save_db(load_orc_files(opts), &opts);
     println!("Total time: {:.2?}", start.elapsed());
