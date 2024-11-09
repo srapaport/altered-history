@@ -26,9 +26,10 @@ fn main() {
         .start()
         .unwrap();
 
-    //Main work
+    //Step 1
     println!("START");
     let start = Instant::now();
+    altered_history::visit_timestamps::retrieve_visit_timestamps(&opts);
     if let Some(cp) = altered_history::load_checkpoint(&opts) {
         altered_history::main_all_database_mpsc_with_cp(&opts, cp);
     } else {
