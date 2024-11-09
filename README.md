@@ -23,6 +23,8 @@ In the `src/main.rs` use the following functions:
 ```rs
 let opts = altered_history::env::Options::parse();
 
+altered_history::visit_timestamps::retrieve_visit_timestamps(&opts);
+
 if let Some(cp) = altered_history::load_checkpoint(&opts){
     altered_history::main_all_database_mpsc_with_cp(&opts, cp);
 }
@@ -70,7 +72,32 @@ Results will be stored in a sub-directory of the path you give as the 4th parame
 
 Always build the `--release` version of this project.
 
-The results directory must be already created with two sub-directory inside: `path/results/focus/classes` 
+The results directory must be already created with two sub-directory inside:
+
+```sh
+mkdir results
+mkdir results/focus
+mkdir results/focus/classes
+```
+
+Execute the program with all the right inputs:
+
+```rs
+pub struct Options {
+    /// Directory containing the orc files
+    pub orc_dir: String,
+    /// Directory containing the database files - no slash at the end
+    pub output_dir: String,
+    /// path of the compressed graph -> e.g. "./datasets/2021-03-23-popular-3k-python-graph/graph"
+    pub graph: String,
+    /// path where results are stored - no slash at the end - must exist -> e.g."./results/2023"
+    pub results: String,
+    /// amount of origins in the graph
+    pub expected_origins: usize,
+    /// amount of origin with an altered history per result file
+    pub chunk: usize,
+}
+```
 
 ```sh
 ./target/release/altered_history <orc file path> <orc file database output> <graph path> <results path> <amount of origins within the graph> <amount of results per file>
