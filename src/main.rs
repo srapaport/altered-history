@@ -8,7 +8,19 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 fn main() {
-    let opts = altered_history::env::Options::parse();
+    //let opts = altered_history::env::Options::parse();
+    let opts = altered_history::env::Options {
+        orc_dir: String::from(""),
+        output_dir: String::from(""),
+        //graph: String::from("path/to/graph"),
+        graph: String::from("/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph"),
+        //results: String::from("/infres/ir800/rapaport/results/FULL_2024_08"),
+        results: String::from("./results"),
+        //expected_origins: 226_726_529,
+        expected_origins: 2_181,
+        //chunk: 10_000,
+        chunk: 10,
+    };
 
     Logger::with(LevelFilter::Info)
         .log_to_file(
