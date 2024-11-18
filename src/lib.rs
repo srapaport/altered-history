@@ -286,7 +286,7 @@ pub fn main_all_database_mpsc(opts: &env::Options) {
             .load_labels()
             .expect("Could not load labels");
 
-        let mut options = Options::default();
+        let options = Options::default();
         let db = DB::open(&options, db_path).unwrap();
         let count_origins = AtomicUsize::new(0);
         let pool = ThreadPoolBuilder::new()
@@ -396,7 +396,7 @@ pub fn main_all_database_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<S
             .load_labels()
             .expect("Could not load labels");
 
-        let mut options = Options::default();
+        let options = Options::default();
         let db = DB::open(&options, db_path).unwrap();
         let count_origins = AtomicUsize::new(0);
         let pool = ThreadPoolBuilder::new()
