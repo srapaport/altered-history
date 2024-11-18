@@ -739,7 +739,7 @@ pub fn classification_all(opts: &env::Options) -> bool {
                                 .expect("couldn't etract name of the csv file")[1];
                             let filename_dst = format!("{}/classes/{}_class.csv", prefix, name);
                             match fs::metadata(&filename_dst) {
-                                Ok(_) => info!("file: {} already exists", filename_dst), //file already exists -> do nothing
+                                Ok(_) => info!("class file: {} already exists", filename_dst), //file already exists -> do nothing
                                 Err(_) => {
                                     let thread_id = unsafe { gettid() };
                                     info!(
@@ -752,7 +752,7 @@ pub fn classification_all(opts: &env::Options) -> bool {
                                         opts,
                                         &graph_t,
                                     ) {
-                                        save_categ(&filename_dst, p);
+                                        save_categ(opts, &filename_dst, p);
                                     }
                                 }
                             }
@@ -770,11 +770,21 @@ pub fn classification_all(opts: &env::Options) -> bool {
 }
 
 fn save_categ(
+    opts: &env::Options,
     filename: &str,
     map: HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
 ) {
+    let prefix = format!("{}/focus/classes", opts.results);
+    //Check if directory exists already
+    match fs::metadata(&prefix) {
+        Ok(_) => (), //Do nothing
+        Err(_) => {
+            fs::create_dir(&prefix)
+                .expect(format!("couldn't create directory: {}", &prefix).as_str());
+        } //Create new directory
+    }
     let Ok(mut file_w) = File::create_new(filename) else {
-        warn!("File {} already exists!", filename);
+        warn!("File class {} already exists!", filename);
         return;
     };
     file_w
