@@ -1,6 +1,6 @@
 use altered_history::classes;
 use altered_history::env;
-use clap::Parser;
+//use clap::Parser;
 use flexi_logger::{Cleanup, Criterion, Duplicate, Logger, Naming};
 use log::info;
 use log::LevelFilter;
