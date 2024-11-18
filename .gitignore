@@ -27,3 +27,4 @@ __pycache__/
 # extension
 **/*.json
 **/*.log
+**/*.csv
