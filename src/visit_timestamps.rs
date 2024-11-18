@@ -36,7 +36,12 @@ fn load_orc_files(opts: &env::Options) -> AllVisits {
     let all_visits = AllVisits::default();
     let expected_origins = opts.expected_origins as u64;
     let bar = ProgressBar::new(expected_origins);
-    bar.set_style(ProgressStyle::with_template("{wide_bar} {eta}").unwrap());
+    bar.set_style(
+        ProgressStyle::with_template(
+            "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
+        )
+        .unwrap(),
+    );
     println!(
         "Pre-reserving memory for up to {} origins",
         HumanCount(expected_origins)
