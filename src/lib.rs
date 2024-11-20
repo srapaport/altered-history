@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::thread;
-use swh_graph::graph::*;
+use swh_graph::{graph::*, properties};
 use swh_graph::java_compat::mph::gov::GOVMPH;
 use swh_graph::labels::{EdgeLabel, VisitStatus};
 use swh_graph::NodeType;
@@ -74,7 +74,13 @@ where
     .unwrap();
 
     'find_altered_commits: loop {
-        let swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+        let mut swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+        while swhid1 == swhid2{
+            if snapshots.len() < 1 {
+                break 'find_altered_commits;
+            }
+            swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+        }
         let swhid2_commits = find_all_commits(
             &swhid2,
             &mut set_branch_kept,
@@ -206,11 +212,19 @@ fn find_all_commits_aux<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
+    // We insert the first revision in all_commits before inserting all successors
+    if graph.properties().node_type(node) == NodeType::Revision{
+        for branch in branch_list {
+            all_commits
+                .entry(branch.clone())
+                .or_insert_with(HashSet::new)
+                .insert(graph.properties().swhid(node).to_string());
+        }
+    }
     let mut nodes_to_visit = Vec::new();
     nodes_to_visit.push(node);
     let mut visited: HashSet<usize> = HashSet::new();
     while let Some(node) = nodes_to_visit.pop() {
-        //debug!("size nodes_to_visit: {}", nodes_to_visit.len());
         if visited.contains(&node) {
             continue;
         }
@@ -218,15 +232,19 @@ fn find_all_commits_aux<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
         let successors = graph.successors(node);
         for succ in successors {
             let succ_type = graph.properties().node_type(succ);
+            // We are not visiting if the successors of Directories
             if succ_type != NodeType::Revision && succ_type != NodeType::Release {
                 continue;
             }
-            let succ_swhid = graph.properties().swhid(succ).to_string();
-            for branch in branch_list {
-                all_commits
-                    .entry(branch.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(succ_swhid.clone());
+            // If the successor is a 
+            if succ_type == NodeType::Revision{
+                let succ_swhid = graph.properties().swhid(succ).to_string();
+                for branch in branch_list {
+                    all_commits
+                        .entry(branch.clone())
+                        .or_insert_with(HashSet::new)
+                        .insert(succ_swhid.clone());
+                }
             }
             set_revs_analyzed.insert(succ);
             nodes_to_visit.push(succ);
