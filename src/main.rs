@@ -48,11 +48,9 @@ fn main() {
     // Retrieve all snapshots per origin with their timestamps (only for teaser datasets)
     altered_history::visit_timestamps::retrieve_visit_timestamps(&opts);
 
-    if let Some(cp) = altered_history::load_checkpoint(&opts) {
-        altered_history::main_all_database_mpsc_with_cp(&opts, cp);
-    } else {
-        altered_history::main_all_database_mpsc(&opts);
-    }
+    let cp = altered_history::load_checkpoint(&opts);
+    altered_history::main_all_rocksdb_mpsc_with_cp(&opts, cp);
+
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
     println!(
         "branch kept: {} | branch rejected: {}",

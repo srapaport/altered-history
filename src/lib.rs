@@ -262,125 +262,19 @@ fn compare_maps(
 }
 
 /// Find all altered commits from the given graph and orc files
-/// Start at the beginning and create a checkpoint
-/// Write the results at opts.results
-pub fn main_all_database_mpsc(opts: &env::Options) {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let prefix_res: &str = opts.results.as_str();
-    let number_of_origins: usize = opts.expected_origins;
-    let chunk: usize = opts.chunk;
-    let db_path = PathBuf::from(opts.output_dir.as_str());
-
-    let (tx, rx) = channel::<(String, Option<HashSet<(String, String, String, String)>>)>();
-
-    let jh = thread::spawn(move || {
-        let workers = num_cpus::get() / 3;
-
-        let graph = SwhUnidirectionalGraph::new(graph_path)
-            .expect("Could not load graph")
-            .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
-            .expect("Could not load maps")
-            .load_properties(|properties| properties.load_label_names())
-            .expect("Could no load label names")
-            .load_labels()
-            .expect("Could not load labels");
-
-        let options = Options::default();
-        let db = DB::open(&options, db_path).unwrap();
-        let count_origins = AtomicUsize::new(0);
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
-            )
-            .unwrap(),
-        );
-
-        pool.install(|| {
-            rayon::scope(|thread| {
-                for result in db.iterator(rocksdb::IteratorMode::Start) {
-                    match result {
-                        Ok((key, value)) => {
-                            thread.spawn({
-                                let tx = tx.clone();
-                                |_| {
-                                    let tx = tx;
-                                    let key = key;
-                                    let value = value;
-                                    count_origins.fetch_add(1, Ordering::Relaxed);
-                                    let key_str = String::from_utf8(key.to_vec()).unwrap();
-                                    let thread_id = unsafe { gettid() };
-                                    info!(
-                                        "Checking Origin: {} | with pid: {:?}",
-                                        key_str, thread_id
-                                    );
-
-                                    let mut sorted_snapshots = snapshots_sorting(value);
-                                    debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-                                    ///////////// altered_commits
-                                    if let Some(curr_altered_commits) =
-                                        altered_commits(&mut sorted_snapshots, &graph)
-                                    {
-                                        info!("Missing commits in {}", key_str);
-                                        tx.send((key_str, Some(curr_altered_commits)))
-                                            .expect("Failed sending the msg");
-                                    } else {
-                                        tx.send((key_str, None)).expect("Failed sending the msg");
-                                    }
-                                    let curr_nb_origins =
-                                        count_origins.load(Ordering::Relaxed) as u64;
-                                    bar.set_position(curr_nb_origins);
-                                }
-                            });
-                        }
-                        Err(_) => continue,
-                    }
-                }
-            });
-        });
-        bar.finish_and_clear();
-    });
-
-    let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
-    let mut cp: HashSet<String> = HashSet::new();
-    File::create(format!("{}/checkpoints", prefix_res)).expect("couldn't create checkpoint file");
-
-    // Receive results in parallel and write them at the frequency of opts.chunk
-    for _ in 0..number_of_origins {
-        let (ori, value) = rx.recv().expect("Couldn't receive data");
-        if let Some(mc) = value {
-            if res.len() > chunk {
-                flush_map(prefix_res, &mut res);
-                create_cp(prefix_res, &mut cp);
-            }
-            res.insert(ori.clone(), mc);
-        }
-        cp.insert(ori);
-    }
-    if res.len() > 0 {
-        flush_map(prefix_res, &mut res);
-    }
-    if cp.len() > 0 {
-        create_cp(prefix_res, &mut cp);
-    }
-    jh.join().unwrap();
-}
-
-/// Find all altered commits from the given graph and orc files
 /// Start where the last checkpoint stoped
 /// Write the results at opts.results
-pub fn main_all_database_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<String>) {
+pub fn main_all_rocksdb_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet<String>>) {
     let graph_path = PathBuf::from(opts.graph.as_str());
     let prefix_res: &str = opts.results.as_str();
     let number_of_origins: usize = opts.expected_origins;
     let chunk: usize = opts.chunk;
     let db_path = PathBuf::from(opts.output_dir.as_str());
+    let checkpoint: HashSet<String>;
+    match checkpoint_opt{
+        Some(cp) => checkpoint = cp,
+        None => checkpoint = HashSet::new(),
+    }
 
     let (tx, rx) = channel::<Option<(String, Option<HashSet<(String, String, String, String)>>)>>();
 
@@ -525,120 +419,18 @@ where
 }
 
 /// Find all altered commits from the given graph and orc files
-/// Start at the beginning and create a checkpoint
-/// Write the results at opts.results
-pub fn main_all_mpsc(opts: &env::Options) {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let prefix_res: &str = opts.results.as_str();
-    let number_of_origins: usize = opts.expected_origins;
-    let chunk: usize = opts.chunk;
-
-    let (tx, rx) = channel::<(String, Option<HashSet<(String, String, String, String)>>)>();
-
-    let jh = thread::spawn(move || {
-        let workers = num_cpus::get() / 3;
-
-        let graph = SwhUnidirectionalGraph::new(graph_path)
-            .expect("Could not load graph")
-            .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
-            .expect("Could not load maps")
-            .load_properties(|properties| properties.load_label_names())
-            .expect("Could no load label names")
-            .load_labels()
-            .expect("Could not load labels");
-
-        let count_origins = AtomicUsize::new(0);
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
-            )
-            .unwrap(),
-        );
-
-        pool.install(|| {
-            rayon::scope(|thread| {
-                for ori in 0..graph.num_nodes() {
-                    if graph.properties().node_type(ori) != NodeType::Origin {
-                        continue;
-                    }
-                    thread.spawn({
-                        let tx = tx.clone();
-                        let count_origins = &count_origins;
-                        let bar = &bar;
-                        let graph = &graph;
-                        move |_| {
-                            let tx = tx;
-                            count_origins.fetch_add(1, Ordering::Relaxed);
-                            let ori_str = graph.properties().swhid(ori).to_string();
-                            let thread_id = unsafe { gettid() };
-                            info!("Checking Origin: {} | with pid: {:?}", ori_str, thread_id);
-                            let sorted_snapshots: Vec<String> =
-                                retrieve_sorted_snapshots(ori, &graph)
-                                    .unwrap()
-                                    .into_iter()
-                                    .map(|(snap, _)| graph.properties().swhid(snap).to_string())
-                                    .collect();
-                            debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-                            ///////////// altered_commits
-                            if let Some(curr_altered_commits) =
-                                altered_commits(&mut VecDeque::from(sorted_snapshots), &graph)
-                            {
-                                info!("Missing commits in {}", ori_str);
-                                tx.send((ori_str, Some(curr_altered_commits)))
-                                    .expect("Failed sending the msg");
-                            } else {
-                                tx.send((ori_str, None)).expect("Failed sending the msg");
-                            }
-                            let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
-                            bar.set_position(curr_nb_origins);
-                        }
-                    });
-                }
-            });
-        });
-        bar.finish_and_clear();
-    });
-
-    let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
-    let mut cp: HashSet<String> = HashSet::new();
-    File::create(format!("{}/checkpoints", prefix_res)).expect("couldn't create checkpoint file");
-
-    // Receive results in parallel and write them at the frequency of opts.chunk
-    for _ in 0..number_of_origins {
-        let (ori, value) = rx.recv().expect("Couldn't receive data");
-        if let Some(mc) = value {
-            if res.len() > chunk {
-                flush_map(prefix_res, &mut res);
-                create_cp(prefix_res, &mut cp);
-            }
-            res.insert(ori.clone(), mc);
-        }
-        cp.insert(ori);
-    }
-    if res.len() > 0 {
-        flush_map(prefix_res, &mut res);
-    }
-    if cp.len() > 0 {
-        create_cp(prefix_res, &mut cp);
-    }
-    jh.join().unwrap();
-}
-
-/// Find all altered commits from the given graph and orc files
 /// Start where the last checkpoint stoped
 /// Write the results at opts.results
-pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<String>) {
+pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet<String>>) {
     let graph_path = PathBuf::from(opts.graph.as_str());
     let prefix_res: &str = opts.results.as_str();
     let number_of_origins: usize = opts.expected_origins;
     let chunk: usize = opts.chunk;
+    let checkpoint: HashSet<String>;
+    match checkpoint_opt{
+        Some(cp) => checkpoint = cp,
+        None => checkpoint = HashSet::new(),
+    }
 
     let (tx, rx) = channel::<Option<(String, Option<HashSet<(String, String, String, String)>>)>>();
 
@@ -812,9 +604,17 @@ fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, St
 
 /// creates a new checkpoint in the file checkpoints
 fn create_cp(prefix: &str, cp: &mut HashSet<String>) {
+    let filename = format!("{}/checkpoints", prefix);
+    match fs::metadata(&filename){
+        Ok(_) => (),
+        Err(_)=>{
+            File::create_new(&filename).expect(format!("File {} already exists!", &filename).as_str());
+            ()
+        }
+    }
     let mut cp_file = fs::OpenOptions::new()
         .append(true)
-        .open(format!("{}/checkpoints", prefix).as_str())
+        .open(filename)
         .expect(format!("cannot open checkpoints file").as_str());
     cp.iter().for_each(|ori| {
         cp_file
