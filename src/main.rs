@@ -1,10 +1,7 @@
 use altered_history::classes;
-use altered_history::env;
-//use clap::Parser;
 use flexi_logger::{Cleanup, Criterion, Duplicate, Logger, Naming};
 use log::info;
 use log::LevelFilter;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 fn main() {
@@ -22,6 +19,7 @@ fn main() {
         expected_origins: 2_181,
         //chunk: 10_000,
         chunk: 10,
+        removed_branch: false,
     };
 
     Logger::with(LevelFilter::Info)
@@ -46,23 +44,23 @@ fn main() {
     println!("START");
     let start = Instant::now();
     // Retrieve all snapshots per origin with their timestamps (only for teaser datasets)
-    altered_history::visit_timestamps::retrieve_visit_timestamps(&opts);
+    //altered_history::visit_timestamps::retrieve_visit_timestamps(&opts);
 
     let cp = altered_history::load_checkpoint(&opts);
     altered_history::main_all_rocksdb_mpsc_with_cp(&opts, cp);
 
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    println!(
-        "branch kept: {} | branch rejected: {}",
-        env::BRANCHES_KEPT.load(Ordering::Relaxed),
-        env::BRANCHES_REJECTED.load(Ordering::Relaxed)
-    );
+    // println!(
+    //     "branch kept: {} | branch rejected: {}",
+    //     env::BRANCHES_KEPT.load(Ordering::Relaxed),
+    //     env::BRANCHES_REJECTED.load(Ordering::Relaxed)
+    // );
     info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    info!(
-        "branch kept: {} | branch rejected: {}",
-        env::BRANCHES_KEPT.load(Ordering::Relaxed),
-        env::BRANCHES_REJECTED.load(Ordering::Relaxed)
-    );
+    // info!(
+    //     "branch kept: {} | branch rejected: {}",
+    //     env::BRANCHES_KEPT.load(Ordering::Relaxed),
+    //     env::BRANCHES_REJECTED.load(Ordering::Relaxed)
+    // );
 
     //Focus
     let start = Instant::now();
