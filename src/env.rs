@@ -4,7 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::atomic::AtomicUsize;
+//use std::sync::atomic::AtomicUsize;
 
 #[derive(Parser)]
 pub struct Options {
@@ -20,6 +20,8 @@ pub struct Options {
     pub expected_origins: usize,
     /// amount of origin with an altered history per result file
     pub chunk: usize,
+    // Wether we include removed branch or not,
+    pub removed_branch: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -36,11 +38,11 @@ pub static RE_CSV: Lazy<Regex> = Lazy::new(|| Regex::new(r".*\.csv$").unwrap());
 pub static RE_FILENAME_WITHOUT_EXT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(.+)\..*$").unwrap());
 pub const MAX_DEPTH: usize = 10;
 
-pub static ORI_KEPT: AtomicUsize = AtomicUsize::new(0);
-pub static ORI_REJECTED: AtomicUsize = AtomicUsize::new(0);
-pub static BRANCHES_KEPT: AtomicUsize = AtomicUsize::new(0);
-pub static BRANCHES_REJECTED: AtomicUsize = AtomicUsize::new(0);
-pub static TOTAL_REV_ANALYZED: AtomicUsize = AtomicUsize::new(0);
+// pub static ORI_KEPT: AtomicUsize = AtomicUsize::new(0);
+// pub static ORI_REJECTED: AtomicUsize = AtomicUsize::new(0);
+// pub static BRANCHES_KEPT: AtomicUsize = AtomicUsize::new(0);
+// pub static BRANCHES_REJECTED: AtomicUsize = AtomicUsize::new(0);
+// pub static TOTAL_REV_ANALYZED: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum MainCateg {
