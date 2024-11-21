@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::thread;
-use swh_graph::{graph::*, properties};
+use swh_graph::graph::*;
 use swh_graph::java_compat::mph::gov::GOVMPH;
 use swh_graph::labels::{EdgeLabel, VisitStatus};
 use swh_graph::NodeType;
@@ -46,6 +46,7 @@ pub fn snapshots_sorting(snapshots: Box<[u8]>) -> VecDeque<String> {
 /// -> (snapshot with altered commit, altered commit, branch name, snapshot without altered commit)
 fn altered_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snapshots: &mut VecDeque<String>,
+    removed_branch: bool,
     graph: &G,
 ) -> Option<HashSet<(String, String, String, String)>>
 where
@@ -59,170 +60,188 @@ where
         return None;
     }
     let mut swhid1 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
-    let mut set_branch_kept = HashSet::new();
-    let mut set_branch_rejected = HashSet::new();
-    let mut set_revs_analyzed = HashSet::new();
-    let mut kept: bool = false;
-    let mut swhid1_commits = find_all_commits(
-        &swhid1,
-        &mut set_branch_kept,
-        &mut set_branch_rejected,
-        &mut set_revs_analyzed,
-        &mut kept,
-        graph,
-    )
-    .unwrap();
+
+    let mut swhid1_heads = branches_head(&swhid1, graph).unwrap();
+
+    let mut swhid1_commits: HashMap<String, HashSet<usize>> = HashMap::new();
 
     'find_altered_commits: loop {
         let mut swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
-        while swhid1 == swhid2{
+        while swhid1 == swhid2 {
             if snapshots.len() < 1 {
                 break 'find_altered_commits;
             }
             swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
         }
-        let swhid2_commits = find_all_commits(
-            &swhid2,
-            &mut set_branch_kept,
-            &mut set_branch_rejected,
-            &mut set_revs_analyzed,
-            &mut kept,
-            graph,
-        )
-        .unwrap();
 
-        let branch_altered_commits = compare_maps(&swhid1_commits, &swhid2_commits);
-        if branch_altered_commits.len() > 0 {
-            curr_altered_commits.extend(
-                branch_altered_commits
-                    .into_iter()
-                    .map(
-                        |(branch_name, commit)| -> (String, String, String, String) {
-                            (swhid1.clone(), branch_name, commit, swhid2.clone())
-                        },
-                    )
-                    .collect::<HashSet<(String, String, String, String)>>(),
-            );
+        let swhid2_heads = branches_head(&swhid2, graph).unwrap();
+
+        let mut swhid2_commits: HashMap<String, HashSet<usize>> = HashMap::new();
+
+        for (branch, head1) in swhid1_heads.iter() {
+            match swhid2_heads.get(branch) {
+                // the branch exists in swhid2
+                Some(head2) => {
+                    // If the branch changed
+                    if *head1 != *head2 {
+                        swhid2_commits
+                            .insert(branch.clone(), find_all_commits_in_branch(*head2, graph));
+                        // If the head is in the commits of snapshot swhid2
+                        if swhid2_commits.get(branch).unwrap().contains(head1) {
+                            continue;
+                        }
+                        if swhid1_commits.get(branch).is_none() {
+                            swhid1_commits
+                                .insert(branch.clone(), find_all_commits_in_branch(*head1, graph));
+                        }
+                        let difference: HashSet<usize> = swhid1_commits
+                            .get(branch)
+                            .unwrap()
+                            .difference(&swhid2_commits.get(branch).unwrap())
+                            .cloned()
+                            .collect();
+                        // if there np missing commit <=> difference is empty, we jump to the next iteration
+                        if difference.is_empty() {
+                            continue;
+                        }
+                        curr_altered_commits.extend(
+                            difference
+                                .into_iter()
+                                .map(|altered_commit| -> (String, String, String, String) {
+                                    let swhid_altered_commit =
+                                        graph.properties().swhid(altered_commit).to_string();
+                                    (
+                                        swhid1.clone(),
+                                        branch.clone(),
+                                        swhid_altered_commit,
+                                        swhid2.clone(),
+                                    )
+                                })
+                                .collect::<HashSet<(String, String, String, String)>>(),
+                        );
+                    }
+                }
+                // the branch doesn't exist anymore
+                None => {
+                    // add all commits from the branch
+                    // to be categorized in RemovedBranch
+                    // if the option removed_branch is true
+                    if removed_branch {
+                        let all_commits;
+                        if swhid1_commits.get(branch).is_none() {
+                            swhid1_commits
+                                .insert(branch.clone(), find_all_commits_in_branch(*head1, graph));
+                        }
+                        all_commits = swhid1_commits.get(branch).unwrap();
+                        curr_altered_commits.extend(
+                            all_commits
+                                .into_iter()
+                                .map(|altered_commit| -> (String, String, String, String) {
+                                    let swhid_altered_commit =
+                                        graph.properties().swhid(*altered_commit).to_string();
+                                    (
+                                        swhid1.clone(),
+                                        branch.clone(),
+                                        swhid_altered_commit,
+                                        swhid2.clone(),
+                                    )
+                                })
+                                .collect::<HashSet<(String, String, String, String)>>(),
+                        );
+                    }
+                }
+            }
         }
-        swhid1 = swhid2;
-        swhid1_commits = swhid2_commits;
-
         if snapshots.len() < 1 {
             break 'find_altered_commits;
         }
+        swhid1 = swhid2;
+        swhid1_heads = swhid2_heads;
+        swhid1_commits = swhid2_commits;
     }
-    env::BRANCHES_KEPT.fetch_add(set_branch_kept.len(), Ordering::Relaxed);
-    env::BRANCHES_REJECTED.fetch_add(set_branch_rejected.len(), Ordering::Relaxed);
     debug!("Current missing commits: {:?}", curr_altered_commits);
-    if kept {
-        env::ORI_KEPT.fetch_add(1, Ordering::Relaxed);
-        env::TOTAL_REV_ANALYZED.fetch_add(set_revs_analyzed.into_iter().count(), Ordering::Relaxed);
-    } else {
-        env::ORI_REJECTED.fetch_add(1, Ordering::Relaxed);
-    }
     if curr_altered_commits.len() == 0 {
         return None;
     }
     Some(curr_altered_commits)
 }
 
-/// Takes a snapshot and returns a map
-/// The map takes the branch name as an entry and has a set of all the commits in the branch as a value
-/// The function also keeps track of the branch that are kept and rejected
-fn find_all_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+fn branches_head<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snap_swhid: &String,
-    set_branch_kept: &mut HashSet<String>,
-    set_branch_rejected: &mut HashSet<String>,
-    set_revs_analyzed: &mut HashSet<usize>,
-    kept: &mut bool,
     graph: &G,
-) -> Option<HashMap<String, HashSet<String>>>
+) -> Option<HashMap<String, usize>>
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
-    let mut all_commits: HashMap<String, HashSet<String>> = HashMap::new();
-    //Check that the swhid given is a snapshot
+    let props = graph.properties();
     if graph
         .properties()
-        .node_type(graph.properties().node_id(snap_swhid.as_str()).unwrap())
+        .node_type(props.node_id(snap_swhid.as_str()).unwrap())
         != NodeType::Snapshot
     {
         return None;
     }
-    //Snapshot ID
-    let node_id = graph.properties().node_id(snap_swhid.as_str()).unwrap();
-    //All the successors of the snapshots
+    let mut heads = HashMap::new();
+    //Snapshot id
+    let node_id = props.node_id(snap_swhid.as_str()).unwrap();
+    //All the successors of the snapshots (Release + Revision)
     let successors = graph.labeled_successors(node_id);
     for (succ, labels) in successors {
-        //succ is the ID a snapshot successor and labels are all the branches it is in
-        let succ_swhid = graph.properties().swhid(succ).to_string();
-        let succ_type = graph.properties().node_type(succ);
+        let succ_type = props.node_type(succ);
         //If the successor is not a revision or a release we don't wanna check its children nor add it to the list
         if !(succ_type == NodeType::Revision) && !(succ_type == NodeType::Release) {
-            debug!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ_swhid);
+            debug!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ);
             continue;
         }
+        let mut head = None;
+        if succ_type == NodeType::Revision {
+            head = Some(succ);
+        } else {
+            // If it is a Release then the head is a successor
+            let mut succ_rel = succ;
+            while props.node_type(succ_rel) != NodeType::Revision {
+                let successors = graph.successors(succ_rel);
+                for succ_succ in successors {
+                    let succ_type = props.node_type(succ_succ);
+                    if succ_type == NodeType::Revision {
+                        head = Some(succ_succ);
+                    }
+                    // else{
+                    //     warn!("The successor of a Release is not a Revision ! | Release {succ}");
+                    // }
+                    succ_rel = succ_succ;
+                }
+            }
+        }
 
-        //We gather all the branches associated to this successor
-        let mut branch_list: Vec<String> = Vec::new();
         for label in labels {
             let branch_name: String;
-            //let filename = graph.properties().label_name(label);
             if let EdgeLabel::Branch(branch) = label {
                 branch_name =
-                    String::from_utf8_lossy(&(graph.properties().label_name(branch.filename_id())))
-                        .to_string();
-                if !env::RE_BRANCH.is_match(&branch_name) {
-                    set_branch_rejected.insert(branch_name);
-                    continue;
-                }
-                *kept = true;
-                set_branch_kept.insert(branch_name.clone());
+                    String::from_utf8_lossy(&(props.label_name(branch.filename_id()))).to_string();
+                heads.insert(branch_name, head.unwrap());
             } else {
                 continue;
             }
-            branch_list.push(branch_name);
         }
-
-        if branch_list.len() == 0 {
-            continue;
-        }
-        find_all_commits_aux(
-            &mut all_commits,
-            &branch_list,
-            succ,
-            set_revs_analyzed,
-            graph,
-        );
     }
-    Some(all_commits)
+    Some(heads)
 }
 
-/// This is an auxiliary function to find_all_commits
-/// this function retrieves all commits that are ancestors of the given one
-/// it will add them to the map associated to all the branches where the given commit is root
-fn find_all_commits_aux<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    all_commits: &mut HashMap<String, HashSet<String>>,
-    branch_list: &Vec<String>,
-    node: usize,
-    set_revs_analyzed: &mut HashSet<usize>,
+fn find_all_commits_in_branch<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+    head: usize,
     graph: &G,
-) where
+) -> HashSet<usize>
+where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
-    // We insert the first revision in all_commits before inserting all successors
-    if graph.properties().node_type(node) == NodeType::Revision{
-        for branch in branch_list {
-            all_commits
-                .entry(branch.clone())
-                .or_insert_with(HashSet::new)
-                .insert(graph.properties().swhid(node).to_string());
-        }
-    }
+    let mut all_commits = HashSet::new();
+
     let mut nodes_to_visit = Vec::new();
-    nodes_to_visit.push(node);
+    nodes_to_visit.push(head);
+    all_commits.insert(head);
     let mut visited: HashSet<usize> = HashSet::new();
     while let Some(node) = nodes_to_visit.pop() {
         if visited.contains(&node) {
@@ -232,51 +251,15 @@ fn find_all_commits_aux<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
         let successors = graph.successors(node);
         for succ in successors {
             let succ_type = graph.properties().node_type(succ);
-            // We are not visiting if the successors of Directories
-            if succ_type != NodeType::Revision && succ_type != NodeType::Release {
+            // We are not visiting the successors of Directories
+            if succ_type != NodeType::Revision {
                 continue;
             }
-            // If the successor is a 
-            if succ_type == NodeType::Revision{
-                let succ_swhid = graph.properties().swhid(succ).to_string();
-                for branch in branch_list {
-                    all_commits
-                        .entry(branch.clone())
-                        .or_insert_with(HashSet::new)
-                        .insert(succ_swhid.clone());
-                }
-            }
-            set_revs_analyzed.insert(succ);
+            all_commits.insert(succ);
             nodes_to_visit.push(succ);
         }
     }
-}
-
-/// retrieve all commits included in the first snapshot but not in the second
-fn compare_maps(
-    is_included: &HashMap<String, HashSet<String>>,
-    include: &HashMap<String, HashSet<String>>,
-) -> HashSet<(String, String)> {
-    let mut not_included: HashSet<(String, String)> = HashSet::new();
-    for (branch_name, commits_included) in is_included {
-        match include.get(branch_name) {
-            Some(include_commits) => {
-                for commit_included in commits_included {
-                    if include_commits.contains(commit_included) {
-                        continue;
-                    }
-                    not_included.insert((branch_name.clone(), commit_included.clone()));
-                }
-            }
-            None => {
-                debug!("Branch: {}, couldn't be found", branch_name);
-                //todo!("Add all the commits in the 'Removed Branch' class");
-                continue;
-            }
-        }
-    }
-    debug!("Not included: {:?}", not_included);
-    not_included
+    all_commits
 }
 
 /// Find all altered commits from the given graph and orc files
@@ -289,7 +272,8 @@ pub fn main_all_rocksdb_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option
     let chunk: usize = opts.chunk;
     let db_path = PathBuf::from(opts.output_dir.as_str());
     let checkpoint: HashSet<String>;
-    match checkpoint_opt{
+    let removed_branch = opts.removed_branch;
+    match checkpoint_opt {
         Some(cp) => checkpoint = cp,
         None => checkpoint = HashSet::new(),
     }
@@ -347,9 +331,11 @@ pub fn main_all_rocksdb_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option
                                         debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
                                         ///////////// altered_commits
-                                        if let Some(curr_altered_commits) =
-                                            altered_commits(&mut sorted_snapshots, &graph)
-                                        {
+                                        if let Some(curr_altered_commits) = altered_commits(
+                                            &mut sorted_snapshots,
+                                            removed_branch,
+                                            &graph,
+                                        ) {
                                             info!(
                                                 "Missing commits in {} | with pid: {}",
                                                 key_str,
@@ -445,7 +431,8 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
     let number_of_origins: usize = opts.expected_origins;
     let chunk: usize = opts.chunk;
     let checkpoint: HashSet<String>;
-    match checkpoint_opt{
+    let removed_branch = opts.removed_branch;
+    match checkpoint_opt {
         Some(cp) => checkpoint = cp,
         None => checkpoint = HashSet::new(),
     }
@@ -506,9 +493,11 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                 debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
                                 ///////////// altered_commits
-                                if let Some(curr_altered_commits) =
-                                    altered_commits(&mut VecDeque::from(sorted_snapshots), &graph)
-                                {
+                                if let Some(curr_altered_commits) = altered_commits(
+                                    &mut VecDeque::from(sorted_snapshots),
+                                    removed_branch,
+                                    &graph,
+                                ) {
                                     info!(
                                         "Missing commits in {} | with pid: {}",
                                         ori_str,
@@ -588,7 +577,9 @@ pub fn main_targeted_origin(
     debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
     ///////////// altered_commits
-    let Some(curr_altered_commits) = altered_commits(&mut sorted_snapshots, &graph) else {
+    let Some(curr_altered_commits) =
+        altered_commits(&mut sorted_snapshots, opts.removed_branch, &graph)
+    else {
         info!("No missing commit in {}", ori);
         return None;
     };
@@ -623,10 +614,11 @@ fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, St
 /// creates a new checkpoint in the file checkpoints
 fn create_cp(prefix: &str, cp: &mut HashSet<String>) {
     let filename = format!("{}/checkpoints", prefix);
-    match fs::metadata(&filename){
+    match fs::metadata(&filename) {
         Ok(_) => (),
-        Err(_)=>{
-            File::create_new(&filename).expect(format!("File {} already exists!", &filename).as_str());
+        Err(_) => {
+            File::create_new(&filename)
+                .expect(format!("File {} already exists!", &filename).as_str());
             ()
         }
     }
