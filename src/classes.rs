@@ -19,7 +19,7 @@ use swh_graph::NodeType;
 fn get_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     rev_swhid: &str,
     graph: &G,
-) -> Option<(usize, String)>
+) -> Option<usize>
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
@@ -27,8 +27,7 @@ where
     let node_id = graph.properties().node_id(rev_swhid).unwrap();
     for succ in graph.successors(node_id) {
         if graph.properties().node_type(succ) == NodeType::Directory {
-            let succ_swhid = graph.properties().swhid(succ).to_string();
-            return Some((succ, succ_swhid));
+            return Some(succ);
         }
     }
 
@@ -57,6 +56,9 @@ where
         let successors = graph.successors(node);
 
         for succ in successors {
+            if graph.properties().node_type(succ) == NodeType::Content{
+                continue;
+            }
             if id_dir == succ {
                 let swhid_parent = graph.properties().swhid(node).to_string();
                 return Some((node, swhid_parent));
@@ -413,8 +415,7 @@ where
                             graph_t.properties().swhid(rev).to_string().as_str(),
                             graph_t,
                         )
-                        .expect(&format!("couldn't find dir for rev {}", rev_swhid))
-                        .0,
+                        .expect(&format!("couldn't find dir for rev {}", rev_swhid)),
                         graph_t,
                     ),
                 );
@@ -627,9 +628,9 @@ fn line_classification<
 {
     let mut categ: env::Categ;
 
-    if let Some((dir, _)) = get_dir(&line.3, graph_t) {
+    if let Some(dir) = get_dir(&line.3, graph_t) {
         let first_difference = is_dir_in_snapshot(dir, &line.4, graph_t);
-
+        // HERE OPTIMIZATION
         match first_difference {
             Some((fd, fd_swhid)) => {
                 //META changes
