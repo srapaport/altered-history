@@ -112,7 +112,7 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
         .load_labels()
         .expect("Could not load labels");
 
-    let workers = num_cpus::get() / 3;
+    let workers = (num_cpus::get() / 3)*2;
     let pool = ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()

@@ -721,7 +721,7 @@ pub fn classification_all(opts: &env::Options) -> bool {
         .load_labels()
         .expect("Could not load labels");
 
-    let workers = num_cpus::get() / 3;
+    let workers = (num_cpus::get() / 3)*2;
     let pool = ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()

@@ -440,7 +440,7 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
     let (tx, rx) = channel::<Option<(String, Option<HashSet<(String, String, String, String)>>)>>();
 
     let jh = thread::spawn(move || {
-        let workers = num_cpus::get() / 3;
+        let workers = (num_cpus::get() / 3)*2;
         let graph = SwhUnidirectionalGraph::new(graph_path)
             .expect("Could not load graph")
             .init_properties()
