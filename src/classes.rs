@@ -1,7 +1,7 @@
 use crate::analysis;
 use crate::env;
 use indicatif::{ProgressBar, ProgressStyle};
-use log::{debug, info, warn};
+use log::{info, warn};
 use rayon::ThreadPoolBuilder;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
@@ -81,8 +81,10 @@ where
     <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
     <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
 {
+    // map returned by the function <path of content, node_id>
     let mut res = HashMap::new();
 
+    // map with <node id, path> to build the final path of each content node
     let mut path_node: HashMap<usize, String> = HashMap::new();
     path_node.insert(dir, String::from("."));
 
@@ -96,7 +98,6 @@ where
         visited.insert(node);
         let successors = graph.labeled_successors(node);
         for (succ, labels) in successors {
-            //code duplication, to change when possible
             for label in labels {
                 let name: String;
                 if let EdgeLabel::DirEntry(dir) = label {
@@ -104,6 +105,7 @@ where
                         String::from_utf8_lossy(&graph.properties().label_name(dir.filename_id()))
                             .to_string();
                 } else {
+                    // We just care about labels that are giving the path
                     continue;
                 }
                 let path = format!(
@@ -129,14 +131,18 @@ where
     res
 }
 
+/// Compare the two given map of <path, node id content>.
+/// return the map of the content that got altered <(path, id content), categ of alteration>
+/// Change this function to count the amount of content modified vs removed
 fn compare_dir(
     dir_src: &HashMap<String, usize>,
     dir_dst: &HashMap<String, usize>,
 ) -> HashMap<(String, usize), Option<env::SubCateg>> {
     let mut res: HashMap<(String, usize), Option<env::SubCateg>> = HashMap::new();
-    dir_src
-        .iter()
-        .for_each(|(path, cnt_id)| match dir_dst.get(path) {
+    let mut modified = false;
+    let mut removed = false;
+    for (path, cnt_id) in dir_src.into_iter(){
+        match dir_dst.get(path) {
             Some(node_id) => {
                 if node_id == cnt_id {
                     res.insert((path.to_owned(), cnt_id.to_owned()), None);
@@ -145,6 +151,7 @@ fn compare_dir(
                         (path.to_owned(), cnt_id.to_owned()),
                         Some(env::SubCateg::FileModified),
                     );
+                    modified = true;
                 }
             }
             None => {
@@ -152,8 +159,34 @@ fn compare_dir(
                     (path.to_owned(), cnt_id.to_owned()),
                     Some(env::SubCateg::FileRemoved),
                 );
+                removed = true;
             }
-        });
+        }
+        if modified && removed{
+            break;
+        }
+    }
+    // To modify if I want to count each amount
+    // dir_src
+    //     .iter()
+    //     .for_each(|(path, cnt_id)| match dir_dst.get(path) {
+    //         Some(node_id) => {
+    //             if node_id == cnt_id {
+    //                 res.insert((path.to_owned(), cnt_id.to_owned()), None);
+    //             } else {
+    //                 res.insert(
+    //                     (path.to_owned(), cnt_id.to_owned()),
+    //                     Some(env::SubCateg::FileModified),
+    //                 );
+    //             }
+    //         }
+    //         None => {
+    //             res.insert(
+    //                 (path.to_owned(), cnt_id.to_owned()),
+    //                 Some(env::SubCateg::FileRemoved),
+    //             );
+    //         }
+    //     });
     res
 }
 
@@ -363,9 +396,9 @@ where
     <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
 {
     let mut res = HashMap::new();
+    let props = graph_t.properties();
 
-    let snap_id = graph_t
-        .properties()
+    let snap_id = props
         .node_id(snap_dst)
         .expect(&format!("couldn't find {} in the graph", snap_dst));
     //Check if the branch still exists
@@ -375,7 +408,7 @@ where
             let curr_branch: String;
             if let EdgeLabel::Branch(b) = label {
                 curr_branch =
-                    String::from_utf8_lossy(&graph_t.properties().label_name(b.filename_id()))
+                    String::from_utf8_lossy(&props.label_name(b.filename_id()))
                         .to_string();
             } else {
                 continue;
@@ -390,13 +423,17 @@ where
         return None; //all the changes are SubCateg::REMOVED --> branch disapeared
     };
 
-    let rev_id = graph_t
+    // node id of altered commit
+    let rev_mc: usize = graph_t
         .properties()
         .node_id(rev_swhid)
         .expect("Couldn't find node id");
 
     let mut succs = HashSet::new();
-    match find_successors(rev_id, graph_t) {
+    // find all successors commits or None is it's the initial commit
+    // successors should be in snap_dst since we focused on root cause commits
+    // if there is no successor, then we compare it with the root commit of snap_dst
+    match find_successors(rev_mc, graph_t) {
         Some(findings) => {
             succs.extend(findings);
         }
@@ -405,21 +442,20 @@ where
         }
     }
 
-    match find_revs(rev_id, succs, graph_t) {
+    match find_revs(rev_mc, succs, graph_t) {
         Some(rev_to_explore) => {
             rev_to_explore.into_iter().for_each(|rev| {
                 let changes = compare_dir(
                     &dir,
                     &get_list_of_content(
                         get_dir(
-                            graph_t.properties().swhid(rev).to_string().as_str(),
+                            props.swhid(rev).to_string().as_str(),
                             graph_t,
                         )
                         .expect(&format!("couldn't find dir for rev {}", rev_swhid)),
                         graph_t,
                     ),
                 );
-                //debug!("changes: {:?}", changes);
                 update_changes(&mut res, changes);
             });
         }
@@ -462,12 +498,12 @@ where
     <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
     <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
 {
-    let rev_id = graph
+    let snap_id = graph
         .properties()
         .node_id(snap_swhid)
         .expect("Couldn't find id for rev");
     let mut to_visit = Vec::new();
-    to_visit.push(rev_id);
+    to_visit.push(snap_id);
     let mut visited = HashSet::new();
     while let Some(node) = to_visit.pop() {
         if visited.contains(&node) {
@@ -521,6 +557,8 @@ where
     Some(res)
 }
 
+/// return all the commits predecessors of the altered commits.
+/// goes to a max depth of `env::MAX_DEPTH`
 fn find_revs<G: SwhLabeledBackwardGraph + SwhGraphWithProperties>(
     missing_commit: usize,
     succs: HashSet<usize>,
@@ -535,52 +573,34 @@ where
 {
     let mut res = HashSet::new();
 
-    for parent in succs.clone() {
-        let swhid = graph_t.properties().swhid(parent).to_string();
-        debug!("missing commit's parent: {}", swhid)
-    }
-
     succs.into_iter().for_each(|succ| {
-        let mut visit_pred = HashSet::new();
-        let mut visit_pred_buff = HashSet::new();
-        visit_pred.insert(succ);
-        for i in 0..env::MAX_DEPTH {
-            debug!("depth : {}", i);
-            visit_pred.into_iter().for_each(|node| {
-                debug!(
-                    "Looking at all pred of {}",
-                    graph_t.properties().swhid(node).to_string()
-                );
+        let mut visit_pred_curr = HashSet::new();
+        let mut visit_pred_next = HashSet::new();
+        visit_pred_curr.insert(succ);
+        for _ in 0..env::MAX_DEPTH {
+            visit_pred_curr.into_iter().for_each(|node| {
                 graph_t.predecessors(node).into_iter().for_each(|pred| {
-                    debug!(
-                        "pred of {} is: {}",
-                        graph_t.properties().swhid(node).to_string(),
-                        graph_t.properties().swhid(pred).to_string()
-                    );
                     match graph_t.properties().node_type(pred) {
                         NodeType::Revision => {
                             if pred != missing_commit {
-                                debug!(
-                                    "inserting: {}",
-                                    graph_t.properties().swhid(pred).to_string()
-                                );
                                 res.insert(pred);
-                                visit_pred_buff.insert(pred);
+                                visit_pred_next.insert(pred);
                             }
                         }
                         _ => (),
                     }
                 });
             });
-            visit_pred = visit_pred_buff.clone();
-            debug!("current state of visit_pred: {:?}", visit_pred);
-            if visit_pred.len() == 0 {
+            visit_pred_curr = visit_pred_next.clone();
+            if visit_pred_curr.len() == 0 {
                 break; //No need to go deeper
             }
-            visit_pred_buff.clear();
+            visit_pred_next.clear();
         }
     });
-    debug!("partial visited: {}", res.len());
+    if res.len() == 0{
+        return None;
+    }
     Some(res)
 }
 
@@ -630,7 +650,6 @@ fn line_classification<
 
     if let Some(dir) = get_dir(&line.3, graph_t) {
         let first_difference = is_dir_in_snapshot(dir, &line.4, graph_t);
-        // HERE OPTIMIZATION
         match first_difference {
             Some((fd, fd_swhid)) => {
                 //META changes
@@ -661,7 +680,7 @@ fn line_classification<
                         categ.sub_categ = get_list_of_changes(changes);
                     }
                     None => {
-                        categ.sub_categ.insert(env::SubCateg::RemovedBranch); //Useless, never happens
+                        categ.sub_categ.insert(env::SubCateg::RemovedBranch); // only usefull if removed_branch is true
                     }
                 }
                 res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
