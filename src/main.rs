@@ -9,7 +9,7 @@ fn main() {
     let opts = altered_history::env::Options {
         orc_dir: String::from("/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-orc/origin_visit_status"),
         output_dir: String::from("./results/db_2021"),
-        //graph: String::from("path/to/graph"),
+        //graph: String::from("/poolswh/softwareheritage/graph/2024-08-23/compressed/graph"),
         graph: String::from(
             "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph",
         ),
