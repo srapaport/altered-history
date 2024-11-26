@@ -7,16 +7,20 @@ use std::time::Instant;
 fn main() {
     //let opts = altered_history::env::Options::parse();
     let opts = altered_history::env::Options {
-        orc_dir: String::from("/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-orc/origin_visit_status"),
-        output_dir: String::from("./results/db_2021"),
+        // orc_dir: String::from("/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-orc/origin_visit_status"),
+        // output_dir: String::from("./results/db_2021"),
+        orc_dir: String::from(""),
+        output_dir: String::from(""),
         //graph: String::from("/poolswh/softwareheritage/graph/2024-08-23/compressed/graph"),
-        graph: String::from(
-            "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph",
-        ),
+        graph: String::from("/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph"),
+        // graph: String::from(
+        //     "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph",
+        // ),
         //results: String::from("/infres/ir800/rapaport/results/FULL_2024_08"),
-        results: String::from("./results"),
+        results: String::from("./results_2024"),
         //expected_origins: 226_726_529,
-        expected_origins: 2_181,
+        // expected_origins: 2_181,
+        expected_origins: 443,
         //chunk: 10_000,
         chunk: 10,
         removed_branch: false,
@@ -43,11 +47,12 @@ fn main() {
     // Step 1
     println!("START");
     let start = Instant::now();
-    // Retrieve all snapshots per origin with their timestamps (only for teaser datasets)
+    // Retrieve all snapshots per origin with their timestamps (only for old teaser datasets)
     //altered_history::visit_timestamps::retrieve_visit_timestamps(&opts);
 
     let cp = altered_history::load_checkpoint(&opts);
-    altered_history::main_all_rocksdb_mpsc_with_cp(&opts, cp);
+    // altered_history::main_all_rocksdb_mpsc_with_cp(&opts, cp);
+    altered_history::main_all_mpsc_with_cp(&opts, cp);
 
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
     // println!(
