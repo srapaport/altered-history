@@ -2,6 +2,7 @@ use std::{collections::VecDeque, path::PathBuf, time::Instant};
 use flexi_logger::{Cleanup, Criterion, Duplicate, Logger, Naming};
 use log::LevelFilter;
 use swh_graph::{graph::{SwhForwardGraph, SwhGraph, SwhGraphWithProperties, SwhUnidirectionalGraph}, mph::DynMphf, NodeType, SwhGraphProperties};
+use indicatif::{ProgressBar, ProgressStyle};
 
 pub fn main(){
 
@@ -133,6 +134,13 @@ fn long_retrieval(){
     println!("retrieve_snapshots | time elapsed: {:.2?}", start.elapsed());
     println!("snapshots\n{:?}", sorted_snapshots);
 
+    let bar = ProgressBar::new(1);
+    bar.set_style(
+        ProgressStyle::with_template(
+            "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
+        )
+        .unwrap(),
+    );
     let start = Instant::now();
     if let Some(_) = altered_history::altered_commits(
         &mut VecDeque::from(sorted_snapshots),
@@ -151,4 +159,7 @@ fn long_retrieval(){
             start.elapsed()
         );
     }
+    // vs 830s with new algorithm
+    bar.set_position(1);
+    bar.finish_and_clear();
 }
