@@ -44,7 +44,7 @@ pub fn snapshots_sorting(snapshots: Box<[u8]>) -> VecDeque<String> {
 /// Take a list of sorted snapshots and a graph
 /// returns a set of all altered commits
 /// -> (snapshot with altered commit, altered commit, branch name, snapshot without altered commit)
-fn altered_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+pub fn altered_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snapshots: &mut VecDeque<String>,
     graph: &G,
 ) -> Option<HashSet<(String, String, String, String)>>
@@ -58,7 +58,7 @@ where
     if snapshots.len() < 2 {
         return None;
     }
-    let mut swhid1 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+    let mut swhid1 = snapshots.pop_front().unwrap();
     let mut set_branch_kept = HashSet::new();
     let mut set_branch_rejected = HashSet::new();
     let mut set_revs_analyzed = HashSet::new();
@@ -74,7 +74,7 @@ where
     .unwrap();
 
     'find_altered_commits: loop {
-        let swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+        let swhid2 = snapshots.pop_front().unwrap();
         let swhid2_commits = find_all_commits(
             &swhid2,
             &mut set_branch_kept,
@@ -167,10 +167,10 @@ where
                 branch_name =
                     String::from_utf8_lossy(&(graph.properties().label_name(branch.filename_id())))
                         .to_string();
-                if !env::RE_BRANCH.is_match(&branch_name) {
-                    set_branch_rejected.insert(branch_name);
-                    continue;
-                }
+                // if !env::RE_BRANCH.is_match(&branch_name) {
+                //     set_branch_rejected.insert(branch_name);
+                //     continue;
+                // }
                 *kept = true;
                 set_branch_kept.insert(branch_name.clone());
             } else {
@@ -206,6 +206,13 @@ fn find_all_commits_aux<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
+    let succ_swhid = graph.properties().swhid(node).to_string();
+    for branch in branch_list {
+        all_commits
+            .entry(branch.clone())
+            .or_insert_with(HashSet::new)
+            .insert(succ_swhid.clone());
+    }
     let mut nodes_to_visit = Vec::new();
     nodes_to_visit.push(node);
     let mut visited: HashSet<usize> = HashSet::new();
