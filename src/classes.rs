@@ -3,6 +3,7 @@ use crate::env;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
 use rayon::ThreadPoolBuilder;
+use swh_graph::mph::DynMphf;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -11,7 +12,6 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
-use swh_graph::java_compat::mph::gov::GOVMPH;
 use swh_graph::labels::EdgeLabel;
 use swh_graph::NodeType;
 
@@ -30,7 +30,6 @@ where
             return Some(succ);
         }
     }
-
     None
 }
 
@@ -452,7 +451,7 @@ where
                             props.swhid(rev).to_string().as_str(),
                             graph_t,
                         )
-                        .expect(&format!("couldn't find dir for rev {}", rev_swhid)),
+                        .expect(&format!("couldn't find dir for rev {}", props.swhid(rev).to_string())),
                         graph_t,
                     ),
                 );
@@ -708,7 +707,7 @@ pub fn classification_all(opts: &env::Options) -> bool {
     let graph_t = SwhBidirectionalGraph::new(PathBuf::from(graph_name))
         .expect("Could not load graph")
         .init_properties()
-        .load_properties(|properties| properties.load_maps::<GOVMPH>())
+        .load_properties(|properties| properties.load_maps::<DynMphf>())
         .expect("Could not load maps")
         .load_properties(|properties| properties.load_timestamps())
         .expect("Could not load timestamps")

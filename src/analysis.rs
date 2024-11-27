@@ -2,6 +2,7 @@ use crate::env;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
 use rayon::ThreadPoolBuilder;
+use swh_graph::mph::DynMphf;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
@@ -9,7 +10,6 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
-use swh_graph::java_compat::mph::gov::GOVMPH;
 
 /// For a set of missing commits, extract the ones that don't have any parents in this set
 /// return Set(origin, snapshot source, branch name, focused commit, snapshot dest)
@@ -99,7 +99,7 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
     let graph = SwhUnidirectionalGraph::new(PathBuf::from(graph_name))
         .expect("Could not load graph")
         .init_properties()
-        .load_properties(|properties| properties.load_maps::<GOVMPH>())
+        .load_properties(|properties| properties.load_maps::<DynMphf>())
         .expect("Could not load maps")
         .load_properties(|properties| properties.load_timestamps())
         .expect("Could not load timestamps")

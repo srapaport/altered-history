@@ -6,7 +6,7 @@ use anyhow::{ensure, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use rayon::ThreadPoolBuilder;
-use rocksdb::{Options, DB};
+use swh_graph::mph::DynMphf;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::fs::File;
@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::thread;
+//use std::time::Instant;
 use swh_graph::graph::*;
-use swh_graph::java_compat::mph::gov::GOVMPH;
 use swh_graph::labels::{EdgeLabel, VisitStatus};
 use swh_graph::NodeType;
 
@@ -44,7 +44,7 @@ pub fn snapshots_sorting(snapshots: Box<[u8]>) -> VecDeque<String> {
 /// Take a list of sorted snapshots and a graph
 /// returns a set of all altered commits
 /// -> (snapshot with altered commit, altered commit, branch name, snapshot without altered commit)
-fn altered_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+pub fn altered_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snapshots: &mut VecDeque<String>,
     removed_branch: bool,
     graph: &G,
@@ -59,19 +59,20 @@ where
     if snapshots.len() < 2 {
         return None;
     }
-    let mut swhid1 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+    // let mut swhid1 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap()); // --> to do like this with rocksdb
+    let mut swhid1 = snapshots.pop_front().unwrap();
 
     let mut swhid1_heads = branches_head(&swhid1, graph).unwrap();
 
     let mut swhid1_commits: HashMap<String, HashSet<usize>> = HashMap::new();
 
     'find_altered_commits: loop {
-        let mut swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+        let mut swhid2 = snapshots.pop_front().unwrap();
         while swhid1 == swhid2 {
             if snapshots.len() < 1 {
                 break 'find_altered_commits;
             }
-            swhid2 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap());
+            swhid2 = snapshots.pop_front().unwrap();
         }
 
         let swhid2_heads = branches_head(&swhid2, graph).unwrap();
@@ -174,12 +175,14 @@ where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
+    //let start = Instant::now();
     let props = graph.properties();
     if graph
         .properties()
         .node_type(props.node_id(snap_swhid.as_str()).unwrap())
         != NodeType::Snapshot
     {
+        //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
         return None;
     }
     let mut heads = HashMap::new();
@@ -226,6 +229,7 @@ where
             }
         }
     }
+    //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
     Some(heads)
 }
 
@@ -237,6 +241,7 @@ where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
+    //let start = Instant::now();
     let mut all_commits = HashSet::new();
 
     let mut nodes_to_visit = Vec::new();
@@ -259,134 +264,8 @@ where
             nodes_to_visit.push(succ);
         }
     }
+    //info!("find_all_commits_in_branch | time elapsed: {:.2?}", start.elapsed());
     all_commits
-}
-
-/// Find all altered commits from the given graph and orc files
-/// Start where the last checkpoint stoped
-/// Write the results at opts.results
-pub fn main_all_rocksdb_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet<String>>) {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let prefix_res: &str = opts.results.as_str();
-    let number_of_origins: usize = opts.expected_origins;
-    let chunk: usize = opts.chunk;
-    let db_path = PathBuf::from(opts.output_dir.as_str());
-    let checkpoint: HashSet<String>;
-    let removed_branch = opts.removed_branch;
-    match checkpoint_opt {
-        Some(cp) => checkpoint = cp,
-        None => checkpoint = HashSet::new(),
-    }
-
-    let (tx, rx) = channel::<Option<(String, Option<HashSet<(String, String, String, String)>>)>>();
-
-    let jh = thread::spawn(move || {
-        let workers = num_cpus::get() / 3;
-        let graph = SwhUnidirectionalGraph::new(graph_path)
-            .expect("Could not load graph")
-            .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
-            .expect("Could not load maps")
-            .load_properties(|properties| properties.load_label_names())
-            .expect("Could no load label names")
-            .load_labels()
-            .expect("Could not load labels");
-
-        let options = Options::default();
-        let db = DB::open(&options, db_path).unwrap();
-        let count_origins = AtomicUsize::new(0);
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
-            )
-            .unwrap(),
-        );
-
-        pool.install(|| {
-            rayon::scope(|thread| {
-                for result in db.iterator(rocksdb::IteratorMode::Start) {
-                    match result {
-                        Ok((key, value)) => {
-                            thread.spawn({
-                                let tx = tx.clone();
-                                |_| {
-                                    let tx = tx;
-                                    let key = key;
-                                    let value = value;
-                                    count_origins.fetch_add(1, Ordering::Relaxed);
-                                    let key_str = String::from_utf8(key.to_vec()).unwrap();
-                                    ///////// Skipping if necessary according to the checkpoints
-                                    if !checkpoint.contains(&key_str) {
-                                        let thread_id = unsafe { gettid() };
-                                        info!(
-                                            "Checking Origin: {} | with pid: {:?}",
-                                            key_str, thread_id
-                                        );
-                                        let mut sorted_snapshots = snapshots_sorting(value);
-                                        debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-                                        ///////////// altered_commits
-                                        if let Some(curr_altered_commits) = altered_commits(
-                                            &mut sorted_snapshots,
-                                            removed_branch,
-                                            &graph,
-                                        ) {
-                                            info!(
-                                                "Missing commits in {} | with pid: {}",
-                                                key_str,
-                                                std::process::id()
-                                            );
-                                            tx.send(Some((key_str, Some(curr_altered_commits))))
-                                                .expect("Failed sending the msg");
-                                        } else {
-                                            tx.send(Some((key_str, None)))
-                                                .expect("Failed sending the msg");
-                                        }
-                                        let curr_nb_origins =
-                                            count_origins.load(Ordering::Relaxed) as u64;
-                                        bar.set_position(curr_nb_origins);
-                                    } else {
-                                        info!("Not calculating Origin: {}", key_str);
-                                        tx.send(None).expect("Failed sending the msg");
-                                    }
-                                }
-                            });
-                        }
-                        Err(_) => continue,
-                    }
-                }
-            });
-        });
-        bar.finish_and_clear();
-    });
-    // Receive results in parallel and write them at the frequency of opts.chunk
-    let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
-    let mut cp: HashSet<String> = HashSet::new();
-    for _ in 0..number_of_origins {
-        if let Some(package) = rx.recv().expect("Couldn't receive data") {
-            let (ori, value) = package;
-            if let Some(mc) = value {
-                if res.len() > chunk {
-                    flush_map(prefix_res, &mut res);
-                    create_cp(prefix_res, &mut cp);
-                }
-                res.insert(ori.clone(), mc);
-            }
-            cp.insert(ori);
-        }
-    }
-    if res.len() > 0 {
-        flush_map(prefix_res, &mut res);
-    }
-    if cp.len() > 0 {
-        create_cp(prefix_res, &mut cp);
-    }
-    jh.join().unwrap();
 }
 
 /// retrieves all snapshots of a given origin
@@ -437,17 +316,19 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
         None => checkpoint = HashSet::new(),
     }
 
-    let (tx, rx) = channel::<Option<(String, Option<HashSet<(String, String, String, String)>>)>>();
+    let (tx, rx) = channel::<Option<(String, String, Option<HashSet<(String, String, String, String)>>)>>();
 
     let jh = thread::spawn(move || {
         let workers = (num_cpus::get() / 3)*2;
         let graph = SwhUnidirectionalGraph::new(graph_path)
             .expect("Could not load graph")
             .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
+            .load_properties(|properties| properties.load_maps::<DynMphf>())
             .expect("Could not load maps")
             .load_properties(|properties| properties.load_label_names())
             .expect("Could no load label names")
+            .load_properties(|properties| properties.load_strings())
+            .expect("Could no load strings")
             .load_labels()
             .expect("Could not load labels");
 
@@ -479,11 +360,12 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                         move |_| {
                             let tx = tx;
                             count_origins.fetch_add(1, Ordering::Relaxed);
-                            let ori_str = graph.properties().swhid(ori).to_string();
+                            let ori_swhid = graph.properties().swhid(ori).to_string();
+                            let ori_url = String::from_utf8_lossy(&graph.properties().message(ori).unwrap()).to_string();
+                            let thread_id = unsafe { gettid() };
                             ///////// Skipping if necessary according to the checkpoints
-                            if !(*checkpoint).contains(&ori_str) {
-                                let thread_id = unsafe { gettid() };
-                                info!("Checking Origin: {} | with pid: {:?}", ori_str, thread_id);
+                            if !(*checkpoint).contains(&ori_swhid) {
+                                info!("Checking Origin: {} | with pid: {:?}", ori_swhid, thread_id);
                                 let sorted_snapshots: Vec<String> =
                                     retrieve_sorted_snapshots(ori, &graph)
                                         .unwrap()
@@ -500,19 +382,24 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                 ) {
                                     info!(
                                         "Missing commits in {} | with pid: {}",
-                                        ori_str,
-                                        std::process::id()
+                                        ori_swhid,
+                                        thread_id
                                     );
-                                    tx.send(Some((ori_str, Some(curr_altered_commits))))
+                                    tx.send(Some((ori_swhid, ori_url, Some(curr_altered_commits))))
                                         .expect("Failed sending the msg");
                                 } else {
-                                    tx.send(Some((ori_str, None)))
+                                    info!(
+                                        "No missing commits in {} | with pid: {}",
+                                        ori_swhid,
+                                        thread_id
+                                    );
+                                    tx.send(Some((ori_swhid, ori_url, None)))
                                         .expect("Failed sending the msg");
                                 }
                                 let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
                                 bar.set_position(curr_nb_origins);
                             } else {
-                                info!("Not calculating Origin: {}", ori_str);
+                                info!("Not calculating Origin: {} | with pid {}", ori_swhid, thread_id);
                                 tx.send(None).expect("Failed sending the msg");
                             }
                         }
@@ -527,15 +414,15 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
     let mut cp: HashSet<String> = HashSet::new();
     for _ in 0..number_of_origins {
         if let Some(package) = rx.recv().expect("Couldn't receive data") {
-            let (ori, value) = package;
+            let (ori_swhid, ori_url, value) = package;
             if let Some(mc) = value {
                 if res.len() > chunk {
                     flush_map(prefix_res, &mut res);
                     create_cp(prefix_res, &mut cp);
                 }
-                res.insert(ori.clone(), mc);
+                res.insert(ori_url, mc);
             }
-            cp.insert(ori);
+            cp.insert(ori_swhid);
         }
     }
     if res.len() > 0 {
@@ -545,45 +432,6 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
         create_cp(prefix_res, &mut cp);
     }
     jh.join().unwrap();
-}
-
-/// Find all altered commits from a given origin
-/// returns a set of (snapshot with altered commit, altered commit, branch name, snapshot without altered commit)
-pub fn main_targeted_origin(
-    opts: &env::Options,
-    ori: &str,
-) -> Option<HashSet<(String, String, String, String)>> {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let db_path = PathBuf::from(opts.output_dir.as_str());
-
-    let graph = SwhUnidirectionalGraph::new(graph_path)
-        .expect("Could not load graph")
-        .init_properties()
-        .load_properties(|properties| properties.load_maps::<GOVMPH>())
-        .expect("Could not load maps")
-        .load_properties(|properties| properties.load_label_names())
-        .expect("Could no load label names")
-        .load_labels()
-        .expect("Could not load labels");
-
-    let options = Options::default();
-    let db = DB::open(&options, db_path).unwrap();
-
-    let value: Box<[u8]> = db.get(ori).unwrap().unwrap().into();
-
-    info!("Origin: {}", ori);
-
-    let mut sorted_snapshots = snapshots_sorting(value);
-    debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-    ///////////// altered_commits
-    let Some(curr_altered_commits) =
-        altered_commits(&mut sorted_snapshots, opts.removed_branch, &graph)
-    else {
-        info!("No missing commit in {}", ori);
-        return None;
-    };
-    Some(curr_altered_commits)
 }
 
 /// writes the current results with chunk amount of results in prefix
