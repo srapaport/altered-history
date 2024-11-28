@@ -70,6 +70,7 @@ dependencies = [
  "ar_row_derive",
  "argmin",
  "bincode",
+ "byteorder",
  "chashmap",
  "clap",
  "csv",
@@ -77,6 +78,8 @@ dependencies = [
  "indicatif",
  "libc",
  "log",
+ "memmap",
+ "mmap-rs",
  "num_cpus",
  "once_cell",
  "orc-rust",
@@ -90,6 +93,7 @@ dependencies = [
  "simplelog",
  "stderrlog",
  "swh-graph",
+ "swh_graph_topology",
 ]
 
 [[package]]
@@ -454,6 +458,9 @@ name = "arrow-schema"
 version = "52.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e972cd1ff4a4ccd22f86d3e53e835c2ed92e0eea6a3e8eadb72b4f1ac802cf8"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "arrow-select"
@@ -705,12 +712,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "binout"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b60b1af88a588fca5fe424ae7d735bc52814f80ff57614f57043cc4e2024f2ea"
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,15 +722,6 @@ name = "bitflags"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b048fb63fd8b5923fc5aa7b340d8e156aec7ec02f0c78fa8a6ddc2613f6f71de"
-
-[[package]]
-name = "bitm"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b06e8e5bec3490b9f6f3adbb78aa4f53e8396fd9994e8a62a346b44ea7c15f35"
-dependencies = [
- "dyn_size_of",
-]
 
 [[package]]
 name = "bitvec"
@@ -1687,6 +1679,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dataset-writer"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9820d373dab3056fbae3dffc9b4ceb623a9df1133b42b02cbe5a1ea7b04119b5"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "csv",
+ "parquet",
+ "rayon",
+ "thread_local",
+ "zstd 0.12.4",
+]
+
+[[package]]
 name = "deranged"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1739,12 +1748,6 @@ dependencies = [
  "pluralizer",
  "sysinfo 0.29.11",
 ]
-
-[[package]]
-name = "dyn_size_of"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33d4f78a40b1ec35bf8cafdaaf607ba2f773c366b0b3bda48937cacd7a8d5134"
 
 [[package]]
 name = "either"
@@ -2729,6 +2732,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
+name = "memmap"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6585fd95e7bb50d6cc31e20d4cf9afb4e2ba16c5846fc76793f11218da9c475b"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3186,19 +3199,6 @@ checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
 dependencies = [
  "fixedbitset",
  "indexmap 2.5.0",
-]
-
-[[package]]
-name = "ph"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86b7b74d575d7c11fb653fae69688be5206cafc1ead33c01ce61ac7f36eae45b"
-dependencies = [
- "binout",
- "bitm",
- "dyn_size_of",
- "rayon",
- "wyhash",
 ]
 
 [[package]]
@@ -3969,9 +3969,9 @@ dependencies = [
 
 [[package]]
 name = "swh-graph"
-version = "6.0.0"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5ee64449b58407ae2748e1ec48d56a6bf056fd77483778534c9fc2af7baa85a"
+checksum = "5c91088eb740f2398b34a6e30ab9995d11c1917c1fb64ab76ec2318947ce07bf"
 dependencies = [
  "anyhow",
  "base64-simd",
@@ -3995,11 +3995,12 @@ dependencies = [
  "mmap-rs",
  "nonmax",
  "num_cpus",
- "ph",
  "pthash",
  "rand 0.8.5",
  "rayon",
  "rdst",
+ "serde",
+ "serde_json",
  "sux",
  "tempfile",
  "thiserror",
@@ -4007,6 +4008,31 @@ dependencies = [
  "tikv-jemallocator",
  "webgraph",
  "zstd 0.12.4",
+]
+
+[[package]]
+name = "swh_graph_topology"
+version = "6.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "249e05142c4c8763cf52f24c06b313f1b2d442418290554723466b68bc8c83c8"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "bytemuck",
+ "clap",
+ "csv",
+ "dataset-writer",
+ "dsi-bitstream",
+ "dsi-progress-logger",
+ "env_logger 0.11.5",
+ "itertools 0.11.0",
+ "log",
+ "mmap-rs",
+ "parquet",
+ "rayon",
+ "rdst",
+ "serde",
+ "swh-graph",
 ]
 
 [[package]]
@@ -4747,15 +4773,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "wyhash"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf6e163c25e3fac820b4b453185ea2dea3b6a3e0a721d4d23d75bd33734c295"
-dependencies = [
- "rand_core 0.6.4",
-]
 
 [[package]]
 name = "wyz"
