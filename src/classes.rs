@@ -3,7 +3,6 @@ use crate::env;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
 use rayon::ThreadPoolBuilder;
-use swh_graph::mph::DynMphf;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -13,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
 use swh_graph::labels::EdgeLabel;
+use swh_graph::mph::DynMphf;
 use swh_graph::NodeType;
 
 /// returns the (node id, swhid) of the root directory of the given commit
@@ -55,7 +55,7 @@ where
         let successors = graph.successors(node);
 
         for succ in successors {
-            if graph.properties().node_type(succ) == NodeType::Content{
+            if graph.properties().node_type(succ) == NodeType::Content {
                 continue;
             }
             if id_dir == succ {
@@ -140,7 +140,7 @@ fn compare_dir(
     let mut res: HashMap<(String, usize), Option<env::SubCateg>> = HashMap::new();
     let mut modified = false;
     let mut removed = false;
-    for (path, cnt_id) in dir_src.into_iter(){
+    for (path, cnt_id) in dir_src.into_iter() {
         match dir_dst.get(path) {
             Some(node_id) => {
                 if node_id == cnt_id {
@@ -161,7 +161,7 @@ fn compare_dir(
                 removed = true;
             }
         }
-        if modified && removed{
+        if modified && removed {
             break;
         }
     }
@@ -407,8 +407,7 @@ where
             let curr_branch: String;
             if let EdgeLabel::Branch(b) = label {
                 curr_branch =
-                    String::from_utf8_lossy(&props.label_name(b.filename_id()))
-                        .to_string();
+                    String::from_utf8_lossy(&props.label_name(b.filename_id())).to_string();
             } else {
                 continue;
             }
@@ -447,11 +446,10 @@ where
                 let changes = compare_dir(
                     &dir,
                     &get_list_of_content(
-                        get_dir(
-                            props.swhid(rev).to_string().as_str(),
-                            graph_t,
-                        )
-                        .expect(&format!("couldn't find dir for rev {}", props.swhid(rev).to_string())),
+                        get_dir(props.swhid(rev).to_string().as_str(), graph_t).expect(&format!(
+                            "couldn't find dir for rev {}",
+                            props.swhid(rev).to_string()
+                        )),
                         graph_t,
                     ),
                 );
@@ -597,7 +595,7 @@ where
             visit_pred_next.clear();
         }
     });
-    if res.len() == 0{
+    if res.len() == 0 {
         return None;
     }
     Some(res)
@@ -720,7 +718,7 @@ pub fn classification_all(opts: &env::Options) -> bool {
         .load_labels()
         .expect("Could not load labels");
 
-    let workers = (num_cpus::get() / 3)*2;
+    let workers = (num_cpus::get() / 3) * 2;
     let pool = ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()

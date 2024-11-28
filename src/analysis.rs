@@ -2,7 +2,6 @@ use crate::env;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
 use rayon::ThreadPoolBuilder;
-use swh_graph::mph::DynMphf;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
@@ -10,6 +9,7 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
+use swh_graph::mph::DynMphf;
 
 /// For a set of missing commits, extract the ones that don't have any parents in this set
 /// return Set(origin, snapshot source, branch name, focused commit, snapshot dest)
@@ -112,7 +112,7 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
         .load_labels()
         .expect("Could not load labels");
 
-    let workers = (num_cpus::get() / 3)*2;
+    let workers = (num_cpus::get() / 3) * 2;
     let pool = ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
