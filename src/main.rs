@@ -1,7 +1,9 @@
 use altered_history::classes;
+use altered_history::env;
 use flexi_logger::{Cleanup, Criterion, Duplicate, Logger, Naming};
 use log::info;
 use log::LevelFilter;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 fn main() {
@@ -51,6 +53,10 @@ fn main() {
     let cp = altered_history::load_checkpoint(&opts);
     altered_history::main_all_mpsc_with_cp(&opts, cp);
 
+    println!(
+        "Origins rejected: {}",
+        env::ORI_REJECTED.load(Ordering::Relaxed)
+    );
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
     // println!(
     //     "branch kept: {} | branch rejected: {}",

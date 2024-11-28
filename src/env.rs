@@ -4,6 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::atomic::AtomicUsize;
 //use std::sync::atomic::AtomicUsize;
 
 #[derive(Parser)]
@@ -38,6 +39,7 @@ pub static RE_CSV: Lazy<Regex> = Lazy::new(|| Regex::new(r".*\.csv$").unwrap());
 pub static RE_FILENAME_WITHOUT_EXT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(.+)\..*$").unwrap());
 pub const MAX_DEPTH: usize = 10;
 
+pub static ORI_REJECTED: AtomicUsize = AtomicUsize::new(0);
 // pub static ORI_KEPT: AtomicUsize = AtomicUsize::new(0);
 // pub static ORI_REJECTED: AtomicUsize = AtomicUsize::new(0);
 // pub static BRANCHES_KEPT: AtomicUsize = AtomicUsize::new(0);
