@@ -410,9 +410,6 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                         tx.send(Some((ori_swhid, ori_url, None)))
                                             .expect("Failed sending the msg");
                                     }
-                                    let curr_nb_origins =
-                                        count_origins.load(Ordering::Relaxed) as u64;
-                                    bar.set_position(curr_nb_origins);
                                 } else {
                                     info!(
                                         "Not calculating Origin: {} | with pid {}",
@@ -422,7 +419,10 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                 }
                             } else {
                                 env::ORI_REJECTED.fetch_add(1, Ordering::Relaxed);
+                                tx.send(Some((ori_swhid, String::new(), None))).expect("Failed sending the msg");
                             }
+                            let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
+                            bar.set_position(curr_nb_origins);
                         }
                     });
                 }
