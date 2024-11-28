@@ -25,7 +25,8 @@ pub fn main(){
 
     // todo!("Missing commits in swh:1:ori:2150853287a431dc908ef264b8a3922a5f3bcfa9 | with pid: 2829474");
     // couldn't find dir for rev swh:1:rev:fe358f4849c005e57328d57a998ab9411e6bbe90
-    let graph = SwhUnidirectionalGraph::new(PathBuf::from("/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph"))
+    //let graph = SwhUnidirectionalGraph::new(PathBuf::from("/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph"))
+    let graph = SwhUnidirectionalGraph::new(PathBuf::from("/poolswh/softwareheritage/graph/2024-08-23/compressed/graph"))
         .expect("Could not load graph")
         .init_properties()
         .load_properties(|properties| properties.load_maps::<DynMphf>())
@@ -36,28 +37,33 @@ pub fn main(){
         .expect("Could not load labels")
         .load_properties(SwhGraphProperties::load_strings)
         .expect("Could not load strings");
-    println!("ori : {}",
-        String::from_utf8_lossy(
-        &graph.properties().message(
-            graph.properties().node_id("swh:1:ori:2150853287a431dc908ef264b8a3922a5f3bcfa9").unwrap()
-        ).unwrap())
-    );
 
-    let ori = graph.properties().node_id("swh:1:ori:2150853287a431dc908ef264b8a3922a5f3bcfa9").unwrap();
-    let sorted_snapshots_tmp =
-        altered_history::retrieve_sorted_snapshots(ori, &graph)
-            .unwrap();
-    let sorted_snapshots: Vec<String> =
-        altered_history::retrieve_sorted_snapshots(ori, &graph)
-            .unwrap()
-            .into_iter()
-            .map(|(snap, _)| graph.properties().swhid(snap).to_string())
-            .collect();
-    println!("snapshots\n{:?}", sorted_snapshots_tmp);
-    let mut queue = VecDeque::from(sorted_snapshots);
-    // "swh:1:snp:49d6a25ba6541aaa6a25141ade01ad5ec28b76e5", "swh:1:snp:c03ad9b857c4dc9843775b5d113bc6e0b464c861", "swh:1:snp:6f12eb19cb480b9bbe4e377ac92b787b848ab59e", "swh:1:snp:bb1c13f4f048f5f60c35b268ad958daaf8dcb537"
-    println!("swhid1: {:?}", queue.pop_front().unwrap());
-    println!("swhid2: {:?}", queue.pop_front().unwrap());
+    let ori = 32285999;
+    if NodeType::Origin == graph.properties().node_type(ori){
+        println!("Yesss : {}", graph.properties().swhid(ori));
+        let url = graph.properties().message(ori).unwrap();
+    }
+    else {
+        println!("Nooo");
+    }
+
+
+
+    // let ori = graph.properties().node_id("swh:1:ori:2150853287a431dc908ef264b8a3922a5f3bcfa9").unwrap();
+    // let sorted_snapshots_tmp =
+    //     altered_history::retrieve_sorted_snapshots(ori, &graph)
+    //         .unwrap();
+    // let sorted_snapshots: Vec<String> =
+    //     altered_history::retrieve_sorted_snapshots(ori, &graph)
+    //         .unwrap()
+    //         .into_iter()
+    //         .map(|(snap, _)| graph.properties().swhid(snap).to_string())
+    //         .collect();
+    // println!("snapshots\n{:?}", sorted_snapshots_tmp);
+    // let mut queue = VecDeque::from(sorted_snapshots);
+    // // "swh:1:snp:49d6a25ba6541aaa6a25141ade01ad5ec28b76e5", "swh:1:snp:c03ad9b857c4dc9843775b5d113bc6e0b464c861", "swh:1:snp:6f12eb19cb480b9bbe4e377ac92b787b848ab59e", "swh:1:snp:bb1c13f4f048f5f60c35b268ad958daaf8dcb537"
+    // println!("swhid1: {:?}", queue.pop_front().unwrap());
+    // println!("swhid2: {:?}", queue.pop_front().unwrap());
     // find_first_ori();
     // retrieve_succs();
     //long_retrieval();
