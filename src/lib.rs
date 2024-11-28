@@ -6,7 +6,6 @@ use anyhow::{ensure, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use rayon::ThreadPoolBuilder;
-use swh_graph::mph::DynMphf;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::fs::File;
@@ -15,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::thread;
+use swh_graph::mph::DynMphf;
 //use std::time::Instant;
 use swh_graph::graph::*;
 use swh_graph::labels::{EdgeLabel, VisitStatus};
@@ -316,10 +316,16 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
         None => checkpoint = HashSet::new(),
     }
 
-    let (tx, rx) = channel::<Option<(String, String, Option<HashSet<(String, String, String, String)>>)>>();
+    let (tx, rx) = channel::<
+        Option<(
+            String,
+            String,
+            Option<HashSet<(String, String, String, String)>>,
+        )>,
+    >();
 
     let jh = thread::spawn(move || {
-        let workers = (num_cpus::get() / 3)*2;
+        let workers = (num_cpus::get() / 3) * 2;
         let graph = SwhUnidirectionalGraph::new(graph_path)
             .expect("Could not load graph")
             .init_properties()
@@ -361,7 +367,11 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                             let tx = tx;
                             count_origins.fetch_add(1, Ordering::Relaxed);
                             let ori_swhid = graph.properties().swhid(ori).to_string();
-                            let ori_url = String::from_utf8_lossy(&graph.properties().message(ori).unwrap()).to_string();
+                            let ori_url =
+                                String::from_utf8_lossy(&graph.properties().message(ori).expect(
+                                    format!("couldn't find url for ori: {}", ori).as_str(),
+                                ))
+                                .to_string();
                             let thread_id = unsafe { gettid() };
                             ///////// Skipping if necessary according to the checkpoints
                             if !(*checkpoint).contains(&ori_swhid) {
@@ -382,16 +392,14 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                 ) {
                                     info!(
                                         "Missing commits in {} | with pid: {}",
-                                        ori_swhid,
-                                        thread_id
+                                        ori_swhid, thread_id
                                     );
                                     tx.send(Some((ori_swhid, ori_url, Some(curr_altered_commits))))
                                         .expect("Failed sending the msg");
                                 } else {
                                     info!(
                                         "No missing commits in {} | with pid: {}",
-                                        ori_swhid,
-                                        thread_id
+                                        ori_swhid, thread_id
                                     );
                                     tx.send(Some((ori_swhid, ori_url, None)))
                                         .expect("Failed sending the msg");
@@ -399,7 +407,10 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                 let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
                                 bar.set_position(curr_nb_origins);
                             } else {
-                                info!("Not calculating Origin: {} | with pid {}", ori_swhid, thread_id);
+                                info!(
+                                    "Not calculating Origin: {} | with pid {}",
+                                    ori_swhid, thread_id
+                                );
                                 tx.send(None).expect("Failed sending the msg");
                             }
                         }
