@@ -63,14 +63,17 @@ where
     let mut swhid1 = snapshots.pop_front().unwrap();
     debug!("swhid1: {swhid1}");
 
-    let mut swhid1_heads = branches_head(&swhid1, graph).unwrap();
+    let mut swhid1_heads : HashMap<String, usize>;
+    match branches_head(&swhid1, graph){
+        None => { return None}
+        Some(b) => {swhid1_heads = b}
+    }
+    
 
     let mut swhid1_commits: HashMap<String, HashSet<usize>> = HashMap::new();
 
     'find_altered_commits: loop {
         let mut swhid2 = snapshots.pop_front().unwrap();
-        debug!("swhid2: {swhid2}");
-        debug!("len snapshots {}", snapshots.len());
         while swhid1 == swhid2 {
             if snapshots.len() < 1 {
                 break 'find_altered_commits;
@@ -78,9 +81,11 @@ where
             swhid2 = snapshots.pop_front().unwrap();
         }
 
-        debug!("compare snap {} vs {}", swhid1, swhid2);
-
-        let swhid2_heads = branches_head(&swhid2, graph).unwrap();
+        let swhid2_heads: HashMap<String, usize>;
+        match branches_head(&swhid2, graph){
+            None => {return None}
+            Some(b) => {swhid2_heads = b}
+        }
 
         let mut swhid2_commits: HashMap<String, HashSet<usize>> = HashMap::new();
 
@@ -180,7 +185,6 @@ where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 { 
-    debug!("start branches_head");
     //let start = Instant::now();
     let props = graph.properties();
     if graph
@@ -188,19 +192,15 @@ where
         .node_type(props.node_id(snap_swhid.as_str()).unwrap())
         != NodeType::Snapshot
     {
-        debug!("end branches_head");
         return None;
     }
     let mut heads = HashMap::new();
     //Snapshot id
     let node_id = props.node_id(snap_swhid.as_str()).unwrap();
-    debug!("snap id: {node_id}");
     //All the successors of the snapshots (Release + Revision)
     let successors = graph.labeled_successors(node_id);
     for (succ, labels) in successors {
-        debug!("start main loop");
         let succ_type = props.node_type(succ);
-        debug!("succ type : {succ_type}");
         //If the successor is not a revision or a release we don't wanna check its children nor add it to the list
         if !(succ_type == NodeType::Revision) && !(succ_type == NodeType::Release) {
             warn!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ);
@@ -250,7 +250,6 @@ where
             }
         }
     }
-    debug!("end branches_head");
     //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
     Some(heads)
 }
