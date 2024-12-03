@@ -203,7 +203,8 @@ where
         let succ_type = props.node_type(succ);
         //If the successor is not a revision or a release we don't wanna check its children nor add it to the list
         if !(succ_type == NodeType::Revision) && !(succ_type == NodeType::Release) {
-            warn!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ);
+            //warn!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ);
+            //Probably returning None but can't be sure so continue
             continue;
         }
         let mut head = None;
@@ -249,6 +250,9 @@ where
                 continue;
             }
         }
+    }
+    if heads.len() == 0{
+        return None;
     }
     //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
     Some(heads)
