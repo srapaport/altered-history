@@ -61,6 +61,7 @@ where
     }
     // let mut swhid1 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap()); // --> to do like this with rocksdb
     let mut swhid1 = snapshots.pop_front().unwrap();
+    debug!("swhid1: {swhid1}");
 
     let mut swhid1_heads = branches_head(&swhid1, graph).unwrap();
 
@@ -68,12 +69,16 @@ where
 
     'find_altered_commits: loop {
         let mut swhid2 = snapshots.pop_front().unwrap();
+        debug!("swhid2: {swhid2}");
+        debug!("len snapshots {}", snapshots.len());
         while swhid1 == swhid2 {
             if snapshots.len() < 1 {
                 break 'find_altered_commits;
             }
             swhid2 = snapshots.pop_front().unwrap();
         }
+
+        debug!("compare snap {} vs {}", swhid1, swhid2);
 
         let swhid2_heads = branches_head(&swhid2, graph).unwrap();
 
@@ -174,7 +179,8 @@ fn branches_head<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
-{
+{ 
+    debug!("start branches_head");
     //let start = Instant::now();
     let props = graph.properties();
     if graph
@@ -182,19 +188,22 @@ where
         .node_type(props.node_id(snap_swhid.as_str()).unwrap())
         != NodeType::Snapshot
     {
-        //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
+        debug!("end branches_head");
         return None;
     }
     let mut heads = HashMap::new();
     //Snapshot id
     let node_id = props.node_id(snap_swhid.as_str()).unwrap();
+    debug!("snap id: {node_id}");
     //All the successors of the snapshots (Release + Revision)
     let successors = graph.labeled_successors(node_id);
     for (succ, labels) in successors {
+        debug!("start main loop");
         let succ_type = props.node_type(succ);
+        debug!("succ type : {succ_type}");
         //If the successor is not a revision or a release we don't wanna check its children nor add it to the list
         if !(succ_type == NodeType::Revision) && !(succ_type == NodeType::Release) {
-            debug!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ);
+            warn!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ);
             continue;
         }
         let mut head = None;
@@ -202,19 +211,31 @@ where
             head = Some(succ);
         } else {
             // If it is a Release then the head is a successor
-            let mut succ_rel = succ;
-            while props.node_type(succ_rel) != NodeType::Revision {
-                let successors = graph.successors(succ_rel);
-                for succ_succ in successors {
-                    let succ_type = props.node_type(succ_succ);
-                    if succ_type == NodeType::Revision {
-                        head = Some(succ_succ);
-                    }
-                    // else{
-                    //     warn!("The successor of a Release is not a Revision ! | Release {succ}");
-                    // }
-                    succ_rel = succ_succ;
+            let mut to_visit = VecDeque::new();
+            to_visit.push_back(succ);
+            let mut visited = HashSet::new();
+            'visit: while let Some(node) = to_visit.pop_front(){
+                if visited.contains(&node){
+                    continue;
                 }
+                visited.insert(node);
+                let successors = graph.successors(node);
+                for succ in successors {
+                    match props.node_type(succ){
+                        NodeType::Revision=>{
+                            head = Some(succ);
+                            break 'visit;
+                        }
+                        NodeType::Release=>{
+                            info!("RELEASE");
+                            to_visit.push_back(succ);
+                        }
+                        _ => ()
+                    }
+                }
+            } 
+            if head == None{
+                return None;
             }
         }
 
@@ -229,6 +250,7 @@ where
             }
         }
     }
+    debug!("end branches_head");
     //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
     Some(heads)
 }
