@@ -383,6 +383,9 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                             .map(|(snap, _)| {
                                                 graph.properties().swhid(snap).to_string()
                                             })
+                                            .filter(|snap|{
+                                                snap != "swh:1:snp:1a8893e6a86f444e8be8e7bda6cb34fb1735a00e"
+                                            })
                                             .collect();
                                     debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
