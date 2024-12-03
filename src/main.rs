@@ -33,7 +33,7 @@ fn main() {
             flexi_logger::FileSpec::default()
                 // .directory("/infres/ir800/rapaport/results/FULL_new/logs")
                 // .basename("FULL-all")
-                .directory("./logs")
+                .directory("./logs_2024")
                 .basename("FULL_2024")
                 .suffix("log"),
         )
