@@ -186,6 +186,7 @@ pub fn load_file_results(
     }
 
     info!("loading res from file: {filename}");
+    let mut cpt = 0;
     csv::ReaderBuilder::new()
         .delimiter(b';')
         .from_path(format!("{prefix}/{filename}"))
@@ -193,19 +194,23 @@ pub fn load_file_results(
         .records()
         .into_iter()
         .for_each(|result| {
-            let srecord = result.unwrap();
-            let origin = srecord.get(0).unwrap().to_owned();
-            let snapshot_src = srecord.get(1).unwrap().to_owned();
-            let branch_name = srecord.get(2).unwrap().to_owned();
-            let missing_commit = srecord.get(3).unwrap().to_owned();
-            let snapshot_dst = srecord.get(4).unwrap().to_owned();
-            res.insert((
-                origin,
-                snapshot_src,
-                branch_name,
-                missing_commit,
-                snapshot_dst,
-            ));
+            cpt += 1;
+            if let Ok(srecord) = result{
+                let origin = crate::put_back_semicolon(srecord.get(0).unwrap());
+                let snapshot_src = srecord.get(1).unwrap().to_owned();
+                let branch_name = crate::put_back_semicolon(srecord.get(2).unwrap());
+                let missing_commit = srecord.get(3).unwrap().to_owned();
+                let snapshot_dst = srecord.get(4).unwrap().to_owned();
+                res.insert((
+                    origin,
+                    snapshot_src,
+                    branch_name,
+                    missing_commit,
+                    snapshot_dst,
+                ));
+            }else{
+                info!("not the right amount of column: {cpt}")
+            }
         });
     return Some(res);
 }
