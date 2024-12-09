@@ -18,13 +18,13 @@ fn main() {
         // graph: String::from(
         //     "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph",
         // ),
-        results: String::from("/infres/ir800/rapaport/results/FULL_2024_08"),
+        results: String::from("/infres/ir800/rapaport/results/FULL_2024_08_v2"),
         //results: String::from("./results_2024"),
         expected_origins: 310_334_314,
         // expected_origins: 2_181,
         //expected_origins: 443,
         //chunk: 10_000,
-        chunk: 100_000,
+        chunk: 50_000,
         removed_branch: false,
     };
 
