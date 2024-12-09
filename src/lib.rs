@@ -498,7 +498,7 @@ fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, St
     map.iter().for_each(|v| {
         v.1.iter().for_each(|set| {
             file_w
-                .write(format!("{};{};{};{};{}\n", v.0, set.0, set.1, set.2, set.3).as_bytes())
+                .write(format!("{};{};{};{};{}\n", replace_semicolon(v.0), replace_semicolon(&set.0), replace_semicolon(&set.1), replace_semicolon(&set.2), replace_semicolon(&set.3)).as_bytes())
                 .expect(format!("couldn't write datas in file: {}", filename_tmp).as_str());
         });
     });
@@ -553,4 +553,12 @@ pub fn load_checkpoint(opts: &env::Options) -> Option<HashSet<String>> {
     }
 
     return Some(res);
+}
+
+pub fn replace_semicolon(source: &str) -> String {
+    return str::replace(source, ";", "&AlteredCommitSemicolon");
+}
+
+pub fn put_back_semicolon(source: &str) -> String {
+    return str::replace(source,  "&AlteredCommitSemicolon", ";");
 }
