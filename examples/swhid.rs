@@ -4,10 +4,14 @@ use log::debug;
 use log::info;
 use log::LevelFilter;
 use csv::Reader;
+use swh_graph::graph::SwhLabeledBackwardGraph;
 use std::error::Error;
 use std::collections::HashSet;
 use std::fmt::format;
 use std::fs;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::{collections::VecDeque, path::PathBuf, time::Instant};
 use swh_graph::labels;
 use swh_graph::labels::DirEntry;
@@ -15,6 +19,7 @@ use swh_graph::{
     graph::{
         SwhForwardGraph, SwhGraph, SwhGraphWithProperties, SwhLabeledForwardGraph,
         SwhUnidirectionalGraph,
+        SwhBidirectionalGraph,
     },
     labels::EdgeLabel,
     mph::DynMphf,
@@ -40,7 +45,7 @@ pub fn main() {
         .start()
         .unwrap();
     //let graph = SwhUnidirectionalGraph::new(PathBuf::from("/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph"))
-    let graph = SwhUnidirectionalGraph::new(PathBuf::from(
+    let graph = SwhBidirectionalGraph::new(PathBuf::from(
         "/poolswh/softwareheritage/graph/2024-08-23/compressed/graph",
     ))
     .expect("Could not load graph")
@@ -54,9 +59,14 @@ pub fn main() {
     .load_properties(SwhGraphProperties::load_strings)
     .expect("Could not load strings");
 
+    let origins = rev_to_ori("swh:1:rev:630cb8507b2f1d7d7af3ac0f992d40f209dc1cee", &graph);
+    for ori in origins{
+        println!("ori: {:?}", ori);
+    }
+    //parser()
     //short_load();
     //example();
-    println!("{}",replace_semicolon("https://test;url;"));
+    //println!("{}",replace_semicolon("https://test;url;"));
 
     //let ori = 32285999;
     //let swhid = "swh:1:ori:64a5d4ddcabdc5089e2bbba7e0b4d3e8a1932521";
@@ -320,4 +330,69 @@ fn example(){
 
 fn replace_semicolon(source: &str) -> String {
     return str::replace(source, ";", "&AlteredCommitSemicolon");
+}
+ 
+fn parser(){
+    let start = Instant::now();
+    let file = File::open("/infres/ir800/rapaport/results/FULL_2024_08/swh:1:snp:1b0d48cd5749808cda6a5eb1dea0da22c7220869.csv").unwrap();
+    let reader = BufReader::new(file);
+
+    let mut line_number = 0;
+    for line in reader.lines(){
+        line_number += 1;
+        if let Ok(line) = line{
+            info!("line: {:?}", line);
+            let csv_line: Vec<&str> = line.split(';').collect();
+            info!("csv line: {:?}", csv_line);
+            if csv_line.len() > 5{
+                break;
+            }
+        }
+        else{
+            info!("Couldn't read line {}", line_number);
+        }
+    }
+    info!("line parsed: {} | time elapsed: {:.2?}", line_number, start.elapsed());
+}
+
+fn rev_to_ori<G>(
+    rev: &str,
+    graph: &G
+) -> HashSet<String>
+where
+    G: SwhLabeledForwardGraph + SwhLabeledBackwardGraph + SwhGraphWithProperties,
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
+{ 
+    let start = Instant::now();
+    let mut res = HashSet::new();
+    let props = graph.properties();
+    let rev_id = props.node_id(rev).unwrap();
+
+    let mut to_visit = VecDeque::new();
+    to_visit.push_back(rev_id);
+    let mut visited = HashSet::new();
+    while let Some(node) = to_visit.pop_back(){
+        if visited.contains(&node){
+            continue;
+        }
+        visited.insert(node);
+        for pred in graph.predecessors(node){
+            match props.node_type(pred){
+                NodeType::Origin =>{ 
+                    let url = props.message(node).unwrap();
+                    res.insert(String::from_utf8_lossy(&url).to_string());
+                }
+                NodeType::Release | NodeType::Revision=>{
+                    to_visit.push_front(node);
+                }
+                _ =>{
+                    continue;
+                }
+            }
+        }
+    }
+    println!("time elapsed: {:.2?}", start.elapsed());
+    res
 }
