@@ -6,8 +6,6 @@ use rayon::ThreadPoolBuilder;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::fs::File;
-use std::io::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
@@ -443,17 +441,22 @@ where
     match find_revs(rev_mc, succs, graph_t) {
         Some(rev_to_explore) => {
             rev_to_explore.into_iter().for_each(|rev| {
-                let changes = compare_dir(
-                    &dir,
-                    &get_list_of_content(
-                        get_dir(props.swhid(rev).to_string().as_str(), graph_t).expect(&format!(
-                            "couldn't find dir for rev {}",
-                            props.swhid(rev).to_string()
-                        )),
-                        graph_t,
-                    ),
-                );
-                update_changes(&mut res, changes);
+                if let Some(dir_dst) = get_dir(props.swhid(rev).to_string().as_str(), graph_t){
+                    let changes = compare_dir(
+                        &dir,
+                        &get_list_of_content(
+                            dir_dst,
+                            graph_t,
+                        ),
+                    );
+                    update_changes(&mut res, changes);
+                }else{
+                    warn!(
+                        "couldn't find dir for rev {}",
+                        props.swhid(rev).to_string()
+                    );
+                    env::REV_WITHOUT_DIR.fetch_add(1, Ordering::Relaxed);
+                }
             });
         }
         None => {
@@ -684,12 +687,13 @@ fn line_classification<
             }
         }
     } else {
-        warn!("Couldn't find a dir for rev {}", line.3.as_str());
-        categ = env::Categ {
-            main_categ: env::MainCateg::LoadingIssue,
-            sub_categ: HashSet::new(),
-        };
-        res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
+        warn!("couldn't find dir for rev {}", line.3.as_str());
+        env::REV_WITHOUT_DIR.fetch_add(1, Ordering::Relaxed);
+        // categ = env::Categ {
+        //     main_categ: env::MainCateg::LoadingIssue,
+        //     sub_categ: HashSet::new(),
+        // };
+        // res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
     }
 }
 
@@ -756,7 +760,7 @@ pub fn classification_all(opts: &env::Options) -> bool {
                                 .expect("couldn't etract name of the csv file")[1];
                             let filename_dst = format!("{}/classes/{}_class.csv", prefix, name);
                             match fs::metadata(&filename_dst) {
-                                Ok(_) => info!("class file: {} already exists", filename_dst), //file already exists -> do nothing
+                                Ok(_) => warn!("classes.rs > classification_all | File {} already exists", filename_dst), //file already exists -> do nothing
                                 Err(_) => {
                                     let thread_id = unsafe { gettid() };
                                     info!(
@@ -793,29 +797,49 @@ fn save_categ(
 ) {
     let prefix = format!("{}/focus/classes", opts.results);
     //Check if directory exists already
-    match fs::metadata(&prefix) {
-        Ok(_) => (), //Do nothing
-        Err(_) => {
-            fs::create_dir(&prefix)
-                .expect(format!("couldn't create directory: {}", &prefix).as_str());
-        } //Create new directory
+    if let Err(_) = fs::metadata(&prefix) {
+        fs::create_dir(&prefix)
+            .expect(format!("couldn't create directory: {}", &prefix).as_str());
+        //Create new directory
     }
-    let Ok(mut file_w) = File::create_new(filename) else {
-        warn!("File class {} already exists!", filename);
+
+    if let Ok(_) = fs::metadata(filename){
+        warn!("classes.rs > save_categ | File {} already exists!", filename);
         return;
-    };
-    file_w
-        .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories\n".as_bytes())
-        .expect(format!("couldn't write headings in file: {}", filename).as_str());
+    }
+    // let Ok(mut file_w) = File::create_new(filename) else {
+    //     warn!("File class {} already exists!", filename);
+    //     return;
+    // };
+    let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(filename).unwrap();
+    // file_w
+    //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories\n".as_bytes())
+    //     .expect(format!("couldn't write headings in file: {}", filename).as_str());
     map.into_iter().for_each(|(k, v)| {
-        file_w
-            .write(
-                format!(
-                    "{};{};{};{};{};{:?};{};{:?}\n",
-                    k.0, k.1, k.2, k.3, k.4, k.5, v.main_categ, v.sub_categ
-                )
-                .as_bytes(),
-            )
-            .expect(format!("couldn't write datas in file: {}", filename).as_str());
+        csv_wrt.serialize(env::AlteredCommit{
+            origin: k.0,
+            snapshot_src: k.1,
+            branch_name: k.2,
+            missing_commit: k.3,
+            snapshot_dst: k.4,
+            first_difference: k.5,
+            main_category: Some(v.main_categ),
+            sub_categories: {
+                let mut subcateg = String::new();
+                v.sub_categ.into_iter().for_each(|sub|{
+                    subcateg = format!("{},{}",subcateg , sub.to_string());
+                });
+                Some(subcateg)
+            },
+        }).expect(format!("couldn't write datas in file: {}", filename).as_str());
+        // file_w
+        //     .write(
+        //         format!(
+        //             "{};{};{};{};{};{:?};{};{:?}\n",
+        //             k.0, k.1, k.2, k.3, k.4, k.5, v.main_categ, v.sub_categ
+        //         )
+        //         .as_bytes(),
+        //     )
+        //     .expect(format!("couldn't write datas in file: {}", filename).as_str());
     });
 }

@@ -4,8 +4,6 @@ use log::{info, warn};
 use rayon::ThreadPoolBuilder;
 use std::collections::HashSet;
 use std::fs;
-use std::fs::File;
-use std::io::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
@@ -62,29 +60,43 @@ fn save_focus_commits(
 ) -> bool {
     let prefix = format!("{}/focus", opts.results);
     //Check if directory exists already
-    match fs::metadata(&prefix) {
-        Ok(_) => (), //Do nothing
-        Err(_) => {
-            fs::create_dir(&prefix)
-                .expect(format!("couldn't create directory: {}", &prefix).as_str());
-        } //Create new directory
+    if let Err(_) = fs::metadata(&prefix) {
+        fs::create_dir(&prefix)
+            .expect(format!("couldn't create directory: {}", &prefix).as_str());
+        //Create new directory
     }
     //save res in file
     let name = &env::RE_FILENAME_WITHOUT_EXT
         .captures(filename)
         .expect("couldn't etract name of the csv file")[1];
     let filename = format!("{}_focus.csv", name);
-    let Ok(mut file_w) = File::create_new(format!("{}/{}", prefix, filename)) else {
-        warn!("File {} already exists!", filename);
+    if let Ok(_) = fs::metadata(format!("{}/{}", prefix, filename)){
+        warn!("analysis.rs > save_focus_commit | File {} already exists!", format!("{}/{}", prefix, filename));
         return false;
-    };
-    file_w
-        .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
-        .expect(format!("couldn't write headings in file: {}", filename).as_str());
+    }
+    let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(format!("{}/{}", prefix, filename)).unwrap();
+    // let Ok(mut file_w) = File::create_new(format!("{}/{}", prefix, filename)) else {
+    //     warn!("File {} already exists!", filename);
+    //     return false;
+    // };
+    // file_w
+    //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
+    //     .expect(format!("couldn't write headings in file: {}", filename).as_str());
     res.iter().for_each(|v| {
-        file_w
-            .write(format!("{};{};{};{};{}\n", v.0, v.1, v.2, v.3, v.4).as_bytes())
-            .expect(format!("couldn't write datas in file: {}", filename).as_str());
+        let record = env::AlteredCommit{
+            origin: v.0.to_string(),
+            snapshot_src: v.1.to_string(),
+            branch_name: v.2.to_string(),
+            missing_commit: v.3.to_string(),
+            snapshot_dst: v.4.to_string(),
+            first_difference: None,
+            main_category: None,
+            sub_categories: None,
+        };
+        csv_wrt.serialize(record).expect(format!("couldn't write datas in file: {}", filename).as_str());
+        // file_w
+        //     .write(format!("{};{};{};{};{}\n", v.0, v.1, v.2, v.3, v.4).as_bytes())
+        //     .expect(format!("couldn't write datas in file: {}", filename).as_str());
     });
     return true;
 }
@@ -149,7 +161,7 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
                                 .expect("couldn't etract name of the csv file")[1];
                             let filename_dst = format!("{}/focus/{}_focus.csv", prefix, name);
                             match fs::metadata(&filename_dst) {
-                                Ok(_) => info!("file: {} already exists", filename), //file already exists -> do nothing
+                                Ok(_) => warn!("analysis.rs > focus_missing_commits_all_files_with_save | File {} already exists", filename), //file already exists -> do nothing
                                 Err(_) => {
                                     focus_missing_commits(
                                         &load_file_results(&opts, &filename).unwrap(),
@@ -187,30 +199,53 @@ pub fn load_file_results(
 
     info!("loading res from file: {filename}");
     let mut cpt = 0;
+
     csv::ReaderBuilder::new()
+        .has_headers(true)
         .delimiter(b';')
         .from_path(format!("{prefix}/{filename}"))
         .unwrap()
-        .records()
+        .deserialize()
         .into_iter()
-        .for_each(|result| {
+        .for_each(|result: Result<env::AlteredCommit, csv::Error>|{
             cpt += 1;
-            if let Ok(srecord) = result{
-                let origin = crate::put_back_semicolon(srecord.get(0).unwrap());
-                let snapshot_src = srecord.get(1).unwrap().to_owned();
-                let branch_name = crate::put_back_semicolon(srecord.get(2).unwrap());
-                let missing_commit = srecord.get(3).unwrap().to_owned();
-                let snapshot_dst = srecord.get(4).unwrap().to_owned();
+            if let Ok(record)= result{
                 res.insert((
-                    origin,
-                    snapshot_src,
-                    branch_name,
-                    missing_commit,
-                    snapshot_dst,
+                    record.origin,
+                    record.snapshot_src,
+                    record.branch_name,
+                    record.missing_commit,
+                    record.snapshot_dst,
                 ));
             }else{
-                info!("not the right amount of column: {cpt}")
+                info!("not the right amount of column: {cpt}");
             }
         });
+
+    // csv::ReaderBuilder::new()
+    //     .delimiter(b';')
+    //     .from_path(format!("{prefix}/{filename}"))
+    //     .unwrap()
+    //     .records()
+    //     .into_iter()
+    //     .for_each(|result| {
+    //         cpt += 1;
+    //         if let Ok(srecord) = result{
+    //             let origin = crate::put_back_semicolon(srecord.get(0).unwrap());
+    //             let snapshot_src = srecord.get(1).unwrap().to_owned();
+    //             let branch_name = crate::put_back_semicolon(srecord.get(2).unwrap());
+    //             let missing_commit = srecord.get(3).unwrap().to_owned();
+    //             let snapshot_dst = srecord.get(4).unwrap().to_owned();
+    //             res.insert((
+    //                 origin,
+    //                 snapshot_src,
+    //                 branch_name,
+    //                 missing_commit,
+    //                 snapshot_dst,
+    //             ));
+    //         }else{
+    //             info!("not the right amount of column: {cpt}")
+    //         }
+    //     });
     return Some(res);
 }

@@ -9,10 +9,6 @@ use std::sync::atomic::AtomicUsize;
 
 #[derive(Parser)]
 pub struct Options {
-    /// Directory containing the orc files
-    pub orc_dir: String,
-    /// Directory containing the database files - no slash at the end
-    pub output_dir: String,
     /// path of the compressed graph -> e.g. "./datasets/2021-03-23-popular-3k-python-graph/graph"
     pub graph: String,
     /// path where results are stored - no slash at the end - must exist -> e.g."./results/2023"
@@ -30,6 +26,18 @@ pub struct Visits {
     pub snapshots: HashMap<String, Vec<i64>>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]//
+pub struct AlteredCommit {//origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories
+    pub origin: String,
+    pub snapshot_src: String,
+    pub branch_name: String,
+    pub missing_commit: String,
+    pub snapshot_dst: String,
+    pub first_difference: Option<String>,
+    pub main_category: Option<MainCateg>,
+    pub sub_categories: Option<String>,
+}
+
 pub const ORIGINS_2021: usize = 2_181;
 pub const ORIGINS_FULL: usize = 226_726_529;
 pub const EMPTY_SNAPSHOT: &str = "1a8893e6a86f444e8be8e7bda6cb34fb1735a00e";
@@ -40,13 +48,14 @@ pub static RE_FILENAME_WITHOUT_EXT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(.+
 pub const MAX_DEPTH: usize = 10;
 
 pub static ORI_REJECTED: AtomicUsize = AtomicUsize::new(0);
+pub static REV_WITHOUT_DIR: AtomicUsize = AtomicUsize::new(0);
 // pub static ORI_KEPT: AtomicUsize = AtomicUsize::new(0);
 // pub static ORI_REJECTED: AtomicUsize = AtomicUsize::new(0);
 // pub static BRANCHES_KEPT: AtomicUsize = AtomicUsize::new(0);
 // pub static BRANCHES_REJECTED: AtomicUsize = AtomicUsize::new(0);
 // pub static TOTAL_REV_ANALYZED: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MainCateg {
     META,
     DIR,
@@ -63,7 +72,7 @@ impl fmt::Display for MainCateg {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SubCateg {
     Message,
     Author,

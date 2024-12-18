@@ -1,7 +1,6 @@
 pub mod analysis;
 pub mod classes;
 pub mod env;
-pub mod visit_timestamps;
 use anyhow::{ensure, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
@@ -488,22 +487,39 @@ fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, St
     let swhid = format!("{}", map.iter().next().unwrap().1.iter().next().unwrap().0);
     let filename = format!("{}/{}.csv", prefix, swhid);
     let filename_tmp = format!("{}/{}.tmp", prefix, swhid);
-    let Ok(mut file_w) = File::create_new(format!("{}", filename_tmp)) else {
-        warn!("File {} already exists!", filename_tmp);
+    if let Ok(_) = fs::metadata(&filename_tmp){
+        warn!("lib.rs > flush_map | File {} already exists!", &filename_tmp);
         return;
-    };
-    file_w
-        .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
-        .expect(format!("couldn't write headings in file: {}", filename_tmp).as_str());
+    }
+    // let Ok(mut file_w) = File::create_new(format!("{}", filename_tmp)) else {
+    //     warn!("File {} already exists!", filename_tmp);
+    //     return;
+    // };
+    let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(filename_tmp.as_str()).unwrap();
+    // file_w
+    //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
+    //     .expect(format!("couldn't write headings in file: {}", filename_tmp).as_str());
     map.iter().for_each(|v| {
         v.1.iter().for_each(|set| {
-            file_w
-                .write(format!("{};{};{};{};{}\n", replace_semicolon(v.0), replace_semicolon(&set.0), replace_semicolon(&set.1), replace_semicolon(&set.2), replace_semicolon(&set.3)).as_bytes())
-                .expect(format!("couldn't write datas in file: {}", filename_tmp).as_str());
+            let record = env::AlteredCommit{
+                origin: v.0.to_string(),
+                snapshot_src: set.0.to_string(),
+                branch_name: set.1.to_string(),
+                missing_commit: set.2.to_string(),
+                snapshot_dst: set.3.to_string(),
+                first_difference: None,
+                main_category: None,
+                sub_categories: None,
+            };
+            csv_wrt.serialize(record).unwrap();
+            // file_w
+            //     .write(format!("{};{};{};{};{}\n", replace_semicolon(v.0), replace_semicolon(&set.0), replace_semicolon(&set.1), replace_semicolon(&set.2), replace_semicolon(&set.3)).as_bytes())
+            //     .expect(format!("couldn't write datas in file: {}", filename_tmp).as_str());
         });
     });
+    csv_wrt.flush().unwrap();
     map.clear();
-    drop(file_w); // didn't end with this instruction one time
+    //drop(file_w); // didn't end with this instruction one time
     std::fs::rename(&filename_tmp, &filename)
         .expect(format!("Couldn't rename {} into {}", filename_tmp, filename).as_str());
 }
@@ -511,13 +527,9 @@ fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, St
 /// creates a new checkpoint in the file checkpoints
 fn create_cp(prefix: &str, cp: &mut HashSet<String>) {
     let filename = format!("{}/checkpoints", prefix);
-    match fs::metadata(&filename) {
-        Ok(_) => (),
-        Err(_) => {
-            File::create_new(&filename)
-                .expect(format!("File {} already exists!", &filename).as_str());
-            ()
-        }
+    if let Err(_) = fs::metadata(&filename) {
+        File::create_new(&filename)
+            .expect(format!("lib.rs > create_cp | File {} already exists!", &filename).as_str());
     }
     let mut cp_file = fs::OpenOptions::new()
         .append(true)

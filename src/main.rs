@@ -9,10 +9,6 @@ use std::time::Instant;
 fn main() {
     //let opts = altered_history::env::Options::parse();
     let opts = altered_history::env::Options {
-        // orc_dir: String::from("/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-orc/origin_visit_status"),
-        // output_dir: String::from("./results/db_2021"),
-        orc_dir: String::from(""),
-        output_dir: String::from(""),
         graph: String::from("/poolswh/softwareheritage/graph/2024-08-23/compressed/graph"),
         //graph: String::from("/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph"),
         // graph: String::from(
@@ -21,9 +17,9 @@ fn main() {
         results: String::from("/infres/ir800/rapaport/results/FULL_2024_08_v2"),
         //results: String::from("./results_2024"),
         expected_origins: 310_334_314,
-        // expected_origins: 2_181,
+        //expected_origins: 2_181,
         //expected_origins: 443,
-        //chunk: 10_000,
+        //chunk: 10,
         chunk: 50_000,
         removed_branch: false,
     };
@@ -46,8 +42,8 @@ fn main() {
         .start()
         .unwrap();
 
-    // Step 1
     println!("START");
+    // Step 1
     let start = Instant::now();
 
     let cp = altered_history::load_checkpoint(&opts);
@@ -58,17 +54,8 @@ fn main() {
         env::ORI_REJECTED.load(Ordering::Relaxed)
     );
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    // println!(
-    //     "branch kept: {} | branch rejected: {}",
-    //     env::BRANCHES_KEPT.load(Ordering::Relaxed),
-    //     env::BRANCHES_REJECTED.load(Ordering::Relaxed)
-    // );
     info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    // info!(
-    //     "branch kept: {} | branch rejected: {}",
-    //     env::BRANCHES_KEPT.load(Ordering::Relaxed),
-    //     env::BRANCHES_REJECTED.load(Ordering::Relaxed)
-    // );
+
 
     //Focus
     let start = Instant::now();
@@ -88,5 +75,13 @@ fn main() {
     info!(
         "Classification complete | time elapsed: {:.2?}",
         start.elapsed()
+    );
+    info!(
+        "Rev without a dir: {}",
+        env::REV_WITHOUT_DIR.load(Ordering::Relaxed)
+    );
+    println!(
+        "Rev without a dir: {}",
+        env::REV_WITHOUT_DIR.load(Ordering::Relaxed)
     );
 }
