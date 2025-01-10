@@ -1,17 +1,19 @@
 use crate::env;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
-use rayon::ThreadPoolBuilder;
+//use rayon::ThreadPoolBuilder;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
 use swh_graph::mph::DynMphf;
+use rayon::prelude::*;
+use std::sync::mpsc::channel;
 
 /// For a set of missing commits, extract the ones that don't have any parents in this set
 /// return Set(origin, snapshot source, branch name, focused commit, snapshot dest)
-fn focus_missing_commits<'a, G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+fn focus_missing_commits<'a, G: SwhLabeledForwardGraph + SwhGraphWithProperties + Sync>(
     missing_commits: &'a HashSet<(String, String, String, String, String)>,
     graph: &G,
     save: Option<(&env::Options, &str)>,
@@ -24,8 +26,9 @@ where
         .into_iter()
         .map(|commit| commit.3.clone())
         .collect();
+
     let res = missing_commits
-        .iter()
+        .into_par_iter()
         .filter(|commit| {
             let node_id = graph.properties().node_id(commit.3.as_str()).unwrap();
             for succ in graph.successors(node_id) {
@@ -74,15 +77,11 @@ fn save_focus_commits(
         warn!("analysis.rs > save_focus_commit | File {} already exists!", format!("{}/{}", prefix, filename));
         return false;
     }
+    let (tx, rx) = channel::<
+        env::AlteredCommit,
+    >();
     let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(format!("{}/{}", prefix, filename)).unwrap();
-    // let Ok(mut file_w) = File::create_new(format!("{}/{}", prefix, filename)) else {
-    //     warn!("File {} already exists!", filename);
-    //     return false;
-    // };
-    // file_w
-    //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
-    //     .expect(format!("couldn't write headings in file: {}", filename).as_str());
-    res.iter().for_each(|v| {
+    res.into_par_iter().for_each(|v| {
         let record = env::AlteredCommit{
             origin: v.0.to_string(),
             snapshot_src: v.1.to_string(),
@@ -93,11 +92,14 @@ fn save_focus_commits(
             main_category: None,
             sub_categories: None,
         };
-        csv_wrt.serialize(record).expect(format!("couldn't write datas in file: {}", filename).as_str());
-        // file_w
-        //     .write(format!("{};{};{};{};{}\n", v.0, v.1, v.2, v.3, v.4).as_bytes())
-        //     .expect(format!("couldn't write datas in file: {}", filename).as_str());
+        let tx = tx.clone();
+        tx.send(record).expect(format!("Failed sending the msg for altered commit {}", v.3).as_str());
     });
+    for _ in 0..res.len(){
+        if let Ok(package) = rx.recv(){
+            csv_wrt.serialize(package).expect(format!("couldn't write datas in file: {}", filename).as_str());
+        }
+    }
     return true;
 }
 
@@ -124,11 +126,11 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
         .load_labels()
         .expect("Could not load labels");
 
-    let workers = (num_cpus::get() / 3) * 2;
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()
-        .unwrap();
+    // let workers = (num_cpus::get() / 3) * 2;
+    // let pool = ThreadPoolBuilder::new()
+    //     .num_threads(workers)
+    //     .build()
+    //     .unwrap();
 
     let entries = fs::read_dir(prefix).expect("can't read dir");
     let bar = ProgressBar::new((entries.count() - 1) as u64);
@@ -140,13 +142,13 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
     );
     let count_file = AtomicUsize::new(0);
 
-    pool.install(|| {
-        rayon::scope(|thread| {
+    //pool.install(|| {
+        //rayon::scope(|thread| {
             fs::read_dir(prefix)
                 .expect("can't read dir")
                 .into_iter()
                 .for_each(|file| {
-                    thread.spawn(|_| {
+                    //thread.spawn(|_| {
                         let filename = &file
                             .unwrap()
                             .path()
@@ -174,10 +176,10 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
                         count_file.fetch_add(1, Ordering::Relaxed);
                         let curr_nb_file = count_file.load(Ordering::Relaxed) as u64;
                         bar.set_position(curr_nb_file);
-                    });
+                    //});
                 });
-        });
-    });
+        //});
+    //});
     bar.finish_and_clear();
     true
 }
@@ -221,31 +223,5 @@ pub fn load_file_results(
                 info!("not the right amount of column: {cpt}");
             }
         });
-
-    // csv::ReaderBuilder::new()
-    //     .delimiter(b';')
-    //     .from_path(format!("{prefix}/{filename}"))
-    //     .unwrap()
-    //     .records()
-    //     .into_iter()
-    //     .for_each(|result| {
-    //         cpt += 1;
-    //         if let Ok(srecord) = result{
-    //             let origin = crate::put_back_semicolon(srecord.get(0).unwrap());
-    //             let snapshot_src = srecord.get(1).unwrap().to_owned();
-    //             let branch_name = crate::put_back_semicolon(srecord.get(2).unwrap());
-    //             let missing_commit = srecord.get(3).unwrap().to_owned();
-    //             let snapshot_dst = srecord.get(4).unwrap().to_owned();
-    //             res.insert((
-    //                 origin,
-    //                 snapshot_src,
-    //                 branch_name,
-    //                 missing_commit,
-    //                 snapshot_dst,
-    //             ));
-    //         }else{
-    //             info!("not the right amount of column: {cpt}")
-    //         }
-    //     });
     return Some(res);
 }

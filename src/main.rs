@@ -44,7 +44,7 @@ fn main() {
 
     println!("START");
     // Step 1
-    let start = Instant::now();
+    /*let start = Instant::now();
 
     let cp = altered_history::load_checkpoint(&opts);
     altered_history::main_all_mpsc_with_cp(&opts, cp);
@@ -54,7 +54,7 @@ fn main() {
         env::ORI_REJECTED.load(Ordering::Relaxed)
     );
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
+    info!("Main work complete | time elapsed: {:.2?}", start.elapsed());*/
 
 
     //Focus

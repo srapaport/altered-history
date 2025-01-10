@@ -227,7 +227,7 @@ where
                             break 'visit;
                         }
                         NodeType::Release=>{
-                            info!("RELEASE");
+                            //info!("RELEASE");
                             to_visit.push_back(succ);
                         }
                         _ => ()
