@@ -1,8 +1,9 @@
 use crate::analysis;
 use crate::env;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::{info, warn};
-use rayon::ThreadPoolBuilder;
+//use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -12,6 +13,7 @@ use swh_graph::graph::*;
 use swh_graph::labels::EdgeLabel;
 use swh_graph::mph::DynMphf;
 use swh_graph::NodeType;
+use std::sync::mpsc::channel;
 
 /// returns the (node id, swhid) of the root directory of the given commit
 fn get_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
@@ -606,11 +608,12 @@ where
 
 /// Classify all the missing commits of a file
 fn file_classification<
-    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph,
+    G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph + Sync,
 >(
     filename: &str,
     opts: &env::Options,
-    graph_t: &G,
+    graph_t: &G, 
+    progress: &MultiProgress,
 ) -> Option<HashMap<(String, String, String, String, String, Option<String>), env::Categ>>
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
@@ -624,11 +627,30 @@ where
     let file_results = analysis::load_file_results(opts, filename)
         .expect(&format!("couldn't load results from {}", filename));
 
-    let mut cpt_line = 0;
-    file_results.into_iter().for_each(|line| {
-        line_classification(&mut res, line, graph_t);
-        cpt_line += 1;
+    let (tx, rx) = channel::<
+        Option<((String, String, String, String, String, Option<String>), env::Categ)>,
+    >();
+    let length = file_results.len();
+    let bar = progress.add(ProgressBar::new(length as u64));
+    bar.set_style(ProgressStyle::with_template("{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
+    bar.set_message(format!("Classifying {}", filename));
+    file_results.into_par_iter().for_each(|line| {
+        let tx = tx.clone(); 
+        let package = line_classification(line.clone(), graph_t);
+        tx.send(package).expect(format!("Failed sending the msg to classify the commit {:?}", line.3).as_str());
+        bar.inc(1);
+        
     });
+    for _ in 0..length{
+        if let Ok(package) = rx.recv(){
+            
+            if let Some(data) = package{
+                res.insert(data.0, data.1);
+            }
+        }
+    }
+    bar.finish_with_message(format!("Done Classifying {}", filename));
+    progress.remove(&bar);
     return Some(res);
 }
 
@@ -636,10 +658,11 @@ where
 fn line_classification<
     G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph,
 >(
-    res: &mut HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
+    //res: &mut HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
     line: (String, String, String, String, String),
     graph_t: &G,
-) where
+) -> Option<((String, String, String, String, String, Option<String>), env::Categ)>
+where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
     <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
@@ -662,10 +685,11 @@ fn line_classification<
                 } else {
                     categ = meta_changes(&line.3, fd, graph_t);
                 }
-                res.insert(
-                    (line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)),
-                    categ,
-                );
+                // res.insert(
+                //     (line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)),
+                //     categ,
+                // );
+                return Some(((line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)), categ));
             }
             None => {
                 //DIR changes
@@ -683,7 +707,8 @@ fn line_classification<
                         categ.sub_categ.insert(env::SubCateg::RemovedBranch); // only usefull if removed_branch is true
                     }
                 }
-                res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
+                //res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
+                return Some(((line.0, line.1, line.2, line.3, line.4, None), categ));
             }
         }
     } else {
@@ -694,6 +719,7 @@ fn line_classification<
         //     sub_categ: HashSet::new(),
         // };
         // res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
+        return None;
     }
 }
 
@@ -722,28 +748,30 @@ pub fn classification_all(opts: &env::Options) -> bool {
         .load_labels()
         .expect("Could not load labels");
 
-    let workers = (num_cpus::get() / 3) * 2;
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()
-        .unwrap();
+    // let workers = (num_cpus::get() / 3) * 2;
+    // let pool = ThreadPoolBuilder::new()
+    //     .num_threads(workers)
+    //     .build()
+    //     .unwrap();
 
     let entries = fs::read_dir(prefix.clone()).expect("can't read dir");
-    let bar = ProgressBar::new((entries.count() - 1) as u64);
-    bar.set_style(
+    let multi_bar = MultiProgress::new();
+    let bar_file = multi_bar.add(ProgressBar::new((entries.count() - 1) as u64));
+    bar_file.set_style(
         ProgressStyle::with_template(
-            "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
+            "{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
         )
         .unwrap(),
     );
+    bar_file.set_message("Amount of Files Classified");
     let count_file = AtomicUsize::new(0);
-    pool.install(|| {
-        rayon::scope(|thread| {
+    //pool.install(|| {
+        //rayon::scope(|thread| {
             fs::read_dir(prefix.clone())
                 .expect("can't read dir")
                 .into_iter()
                 .for_each(|file| {
-                    thread.spawn(|_| {
+                    //thread.spawn(|_| {
                         let filename = &file
                             .unwrap()
                             .path()
@@ -772,21 +800,22 @@ pub fn classification_all(opts: &env::Options) -> bool {
                                         &format!("focus/{}", filename),
                                         opts,
                                         &graph_t,
+                                        &multi_bar,
                                     ) {
-                                        save_categ(opts, &filename_dst, p);
+                                        save_categ(opts, &filename_dst, p, &multi_bar);
                                     }
                                 }
                             }
                         }
                         count_file.fetch_add(1, Ordering::Relaxed);
                         let curr_nb_file = count_file.load(Ordering::Relaxed) as u64;
-                        bar.set_position(curr_nb_file);
-                    });
+                        bar_file.set_position(curr_nb_file);
+                    //});
                 });
-        });
-    });
+        //});
+    //});
 
-    bar.finish_and_clear();
+    bar_file.finish_with_message("Finished Classifying all Files");
     true
 }
 
@@ -794,6 +823,7 @@ fn save_categ(
     opts: &env::Options,
     filename: &str,
     map: HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
+    progress: &MultiProgress,
 ) {
     let prefix = format!("{}/focus/classes", opts.results);
     //Check if directory exists already
@@ -811,16 +841,28 @@ fn save_categ(
     //     warn!("File class {} already exists!", filename);
     //     return;
     // };
+    let length = map.len();
+    let bar = progress.add(ProgressBar::new(length as u64));
+    bar.set_style(
+        ProgressStyle::with_template(
+            "{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
+        )
+        .unwrap(),
+    );
+    bar.set_message(format!("Saving Classified Data in {}", filename));
+    let (tx, rx) = channel::<
+        env::AlteredCommit,
+    >();
     let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(filename).unwrap();
     // file_w
     //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories\n".as_bytes())
     //     .expect(format!("couldn't write headings in file: {}", filename).as_str());
-    map.into_iter().for_each(|(k, v)| {
-        csv_wrt.serialize(env::AlteredCommit{
+    map.into_par_iter().for_each(|(k, v)| {
+        let record = env::AlteredCommit{
             origin: k.0,
             snapshot_src: k.1,
             branch_name: k.2,
-            missing_commit: k.3,
+            missing_commit: k.3.clone(),
             snapshot_dst: k.4,
             first_difference: k.5,
             main_category: Some(v.main_categ),
@@ -831,7 +873,10 @@ fn save_categ(
                 });
                 Some(subcateg)
             },
-        }).expect(format!("couldn't write datas in file: {}", filename).as_str());
+        };
+        let tx = tx.clone();
+        tx.send(record).expect(format!("failed sending the record for classifying {} in file {}", k.3, filename).as_str());
+        bar.inc(1);
         // file_w
         //     .write(
         //         format!(
@@ -842,4 +887,12 @@ fn save_categ(
         //     )
         //     .expect(format!("couldn't write datas in file: {}", filename).as_str());
     });
+    for _ in 0..length{
+        if let Ok(package) = rx.recv(){
+            let mc = package.missing_commit.clone();
+            csv_wrt.serialize(package).expect(format!("Couldn't serialize classified data {} in file {}", mc, filename).as_str());
+        }
+    }
+    bar.finish_with_message(format!("Done Saving Classified Data in {}", filename));
+    progress.remove(&bar);
 }
