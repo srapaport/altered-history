@@ -107,11 +107,12 @@ fn save_focus_commits(
         };
         let tx = tx.clone();
         tx.send(record).expect(format!("Failed sending the msg for altered commit {}", v.3).as_str());
+        bar.inc(1);
     });
     for _ in 0..res.len(){
         if let Ok(package) = rx.recv(){
             csv_wrt.serialize(package).expect(format!("couldn't write datas in file: {}", filename).as_str());
-            bar.inc(1);
+            
         }
     }
     bar.finish_with_message(format!("Done Saving {}", filename));
