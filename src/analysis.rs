@@ -86,8 +86,8 @@ fn save_focus_commits(
         return false;
     }
     let bar = progress.add(ProgressBar::new(res.len() as u64));
-    bar.set_style(ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
-    bar.set_message("Saving Root Cause Commits");
+    bar.set_style(ProgressStyle::with_template("{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
+    bar.set_message(format!("Saving Root Cause Commits {}", filename));
 
     let (tx, rx) = channel::<
         env::AlteredCommit,
@@ -114,7 +114,7 @@ fn save_focus_commits(
             bar.inc(1);
         }
     }
-    bar.finish_with_message("Done Saving");
+    bar.finish_with_message(format!("Done Saving {}", filename));
     progress.remove(&bar);
     return true;
 }
@@ -152,7 +152,7 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
     let multi_bar = MultiProgress::new();
     let bar_file = multi_bar.add(ProgressBar::new((entries.count() - 1) as u64));
     //let bar = ProgressBar::new((entries.count() - 1) as u64);
-    let bar_style = ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap();
+    let bar_style = ProgressStyle::with_template("{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap();
     bar_file.set_style(bar_style);
     bar_file.set_message("Amount of File");
     let count_file = AtomicUsize::new(0);
