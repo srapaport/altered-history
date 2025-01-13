@@ -1,5 +1,5 @@
 use crate::env;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::{info, warn};
 //use rayon::ThreadPoolBuilder;
 use std::collections::HashSet;
@@ -17,6 +17,7 @@ fn focus_missing_commits<'a, G: SwhLabeledForwardGraph + SwhGraphWithProperties 
     missing_commits: &'a HashSet<(String, String, String, String, String)>,
     graph: &G,
     save: Option<(&env::Options, &str)>,
+    progress: &MultiProgress,
 ) -> HashSet<(String, String, String, String, String)>
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
@@ -27,6 +28,9 @@ where
         .map(|commit| commit.3.clone())
         .collect();
 
+    let bar = progress.add(ProgressBar::new(missing_commits.len() as u64));
+    bar.set_style(ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
+    bar.set_message("Retrieving Root Cause Commits");
     let res = missing_commits
         .into_par_iter()
         .filter(|commit| {
@@ -34,18 +38,21 @@ where
             for succ in graph.successors(node_id) {
                 let swhid = graph.properties().swhid(succ).to_string();
                 if rev_only.contains(&swhid) {
+                    bar.inc(1);
                     return false;
                 }
             }
+            bar.inc(1);
             true
         })
         .map(|commit| commit.clone())
         .collect();
-
+    bar.finish_with_message("Done Retrieving");
+    progress.remove(&bar);
     match save {
         None => return res,
         Some((opts, filename)) => {
-            if !save_focus_commits(opts, filename, &res) {
+            if !save_focus_commits(opts, filename, &res, progress) {
                 warn!("couldn't save focus commits");
             }
         }
@@ -60,6 +67,7 @@ fn save_focus_commits(
     opts: &env::Options,
     filename: &str,
     res: &HashSet<(String, String, String, String, String)>,
+    progress: &MultiProgress,
 ) -> bool {
     let prefix = format!("{}/focus", opts.results);
     //Check if directory exists already
@@ -77,9 +85,14 @@ fn save_focus_commits(
         warn!("analysis.rs > save_focus_commit | File {} already exists!", format!("{}/{}", prefix, filename));
         return false;
     }
+    let bar = progress.add(ProgressBar::new(res.len() as u64));
+    bar.set_style(ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
+    bar.set_message("Saving Root Cause Commits");
+
     let (tx, rx) = channel::<
         env::AlteredCommit,
     >();
+
     let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(format!("{}/{}", prefix, filename)).unwrap();
     res.into_par_iter().for_each(|v| {
         let record = env::AlteredCommit{
@@ -98,8 +111,11 @@ fn save_focus_commits(
     for _ in 0..res.len(){
         if let Ok(package) = rx.recv(){
             csv_wrt.serialize(package).expect(format!("couldn't write datas in file: {}", filename).as_str());
+            bar.inc(1);
         }
     }
+    bar.finish_with_message("Done Saving");
+    progress.remove(&bar);
     return true;
 }
 
@@ -133,13 +149,12 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
     //     .unwrap();
 
     let entries = fs::read_dir(prefix).expect("can't read dir");
-    let bar = ProgressBar::new((entries.count() - 1) as u64);
-    bar.set_style(
-        ProgressStyle::with_template(
-            "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
-        )
-        .unwrap(),
-    );
+    let multi_bar = MultiProgress::new();
+    let bar_file = multi_bar.add(ProgressBar::new((entries.count() - 1) as u64));
+    //let bar = ProgressBar::new((entries.count() - 1) as u64);
+    let bar_style = ProgressStyle::with_template("{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap();
+    bar_file.set_style(bar_style);
+    bar_file.set_message("Amount of File");
     let count_file = AtomicUsize::new(0);
 
     //pool.install(|| {
@@ -165,22 +180,24 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
                             match fs::metadata(&filename_dst) {
                                 Ok(_) => warn!("analysis.rs > focus_missing_commits_all_files_with_save | File {} already exists", filename), //file already exists -> do nothing
                                 Err(_) => {
+                                    
                                     focus_missing_commits(
                                         &load_file_results(&opts, &filename).unwrap(),
                                         &graph,
                                         Some((opts, &filename)),
+                                        &multi_bar,
                                     );
                                 }
                             }
                         }
                         count_file.fetch_add(1, Ordering::Relaxed);
                         let curr_nb_file = count_file.load(Ordering::Relaxed) as u64;
-                        bar.set_position(curr_nb_file);
+                        bar_file.set_position(curr_nb_file);
                     //});
                 });
         //});
     //});
-    bar.finish_and_clear();
+    bar_file.finish_with_message("Finished All Files");
     true
 }
 
