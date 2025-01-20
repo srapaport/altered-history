@@ -155,8 +155,8 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
     //let bar = ProgressBar::new((entries.count() - 1) as u64);
     let bar_style = ProgressStyle::with_template("{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap();
     bar_file.set_style(bar_style);
-    bar_file.set_message("Amount of File");
-    let count_file = AtomicUsize::new(0);
+    bar_file.set_message("Amount of File to find Root Cause");
+    //let count_file = AtomicUsize::new(0);
 
     //pool.install(|| {
         //rayon::scope(|thread| {
@@ -191,9 +191,10 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
                                 }
                             }
                         }
-                        count_file.fetch_add(1, Ordering::Relaxed);
-                        let curr_nb_file = count_file.load(Ordering::Relaxed) as u64;
-                        bar_file.set_position(curr_nb_file);
+                        // count_file.fetch_add(1, Ordering::Relaxed);
+                        // let curr_nb_file = count_file.load(Ordering::Relaxed) as u64;
+                        // bar_file.set_position(curr_nb_file);
+                        bar_file.inc(1);
                     //});
                 });
         //});
@@ -209,6 +210,7 @@ pub fn load_file_results(
     opts: &env::Options,
     filename: &str,
 ) -> Option<HashSet<(String, String, String, String, String)>> {
+    /// Parallelize if possible / relevant
     let prefix: &str = opts.results.as_str();
     let mut res = HashSet::new();
 
