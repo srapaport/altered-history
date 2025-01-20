@@ -29,7 +29,7 @@ fn main() {
             flexi_logger::FileSpec::default()
                 // .directory("/infres/ir800/rapaport/results/FULL_new/logs")
                 // .basename("FULL-all")
-                .directory("./logs_2024")
+                .directory("./test_logs")
                 .basename("FULL_2024")
                 .suffix("log"),
         )
@@ -38,13 +38,13 @@ fn main() {
             Naming::Numbers,             // Use numbers for rotated files
             Cleanup::KeepLogFiles(5),    // Keep at most 5 log files
         )
-        .duplicate_to_stderr(Duplicate::Warn) // Duplicate logs to stderr
+        //.duplicate_to_stderr(Duplicate::Warn) // Duplicate logs to stderr
         .start()
         .unwrap();
 
     println!("START");
     // Step 1
-    /*let start = Instant::now();
+    let start = Instant::now();
 
     let cp = altered_history::load_checkpoint(&opts);
     altered_history::main_all_mpsc_with_cp(&opts, cp);
@@ -54,7 +54,7 @@ fn main() {
         env::ORI_REJECTED.load(Ordering::Relaxed)
     );
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    info!("Main work complete | time elapsed: {:.2?}", start.elapsed());*/
+    info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
 
 
     //Focus
