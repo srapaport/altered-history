@@ -39,21 +39,26 @@ def add_relations_v2(alone, single, couple, triple, ll):
     return len(ll)
 
 def display_single(stats):
+    plt.figure(figsize=(9, 6))
     colors = ['blue', 'blue', 'blue', 'blue', 'blue', 'orange', 'green', 'green', 'green', 'grey']
-    categories = ['Author', 'Message', 'Date', 'Committer', 'CommitterDate', 'DifferentBranchName', 'ContentModified', 'ContentRemoved', 'ContentDiluted', '']
+    categories = ['Author', 'Message', 'Date', 'Committer', 'CommitterDate', 'DifferentBranchName', 'FileModified', 'FileRemoved', 'ContentSplit', 'Other']
     values = []
     for i in range(len(categories)):
         values.append(stats[categories[i]])
-    categories[-1] = 'Other' 
-    categories[6] = 'FileModified'
-    categories[7] = 'FileRemoved'
-    categories[8] = 'ContentSplit'
+
     plt.bar(categories, values, color=colors)
-    plt.xticks(range(len(categories)), categories, ha='right')
-    plt.xticks(rotation=45, horizontalalignment='right')
+    plt.grid(True, linestyle='--', alpha=0.3, axis='y')
+    plt.ylabel('Number of Changes', fontsize=12)
+    
+    plt.xticks(range(len(categories)), categories, rotation=45, 
+               horizontalalignment='right', fontsize=10)
+    plt.yticks(fontsize=10)
     
     for i, value in enumerate(values):
         plt.text(i, value, f'{value:,}', ha='center', va='bottom')
+        
+    plt.margins(x=0.01)
+    plt.tight_layout()
         
     plt.show()
     
@@ -64,17 +69,19 @@ def display_single_META(stats):
     for i in range(len(categories)):
         values.append(stats[categories[i]])
     plt.bar(categories, values, color=colors)
+    plt.grid(True, linestyle='--', alpha=0.3, axis='y')
     plt.xticks(range(len(categories)), categories, ha='right')
     plt.xticks(rotation=45, horizontalalignment='right')
     
     for i, value in enumerate(values):
         plt.text(i, value, f'{value:,}', ha='center', va='bottom')
         
+    #plt.tight_layout()
     plt.show()
     
 def display_single_DIR(stats):
     colors = ['orange', 'green', 'green', 'green']
-    categories = ['DifferentBranchName', 'ContentModified', 'ContentRemoved', 'ContentDiluted']
+    categories = ['DifferentBranchName', 'FileModified', 'FileRemoved', 'ContentSplit']
     values = []
     for i in range(len(categories)):
         values.append(stats[categories[i]]) 
@@ -82,12 +89,14 @@ def display_single_DIR(stats):
     categories[2] = 'FileRemoved'
     categories[3] = 'ContentSplit'
     plt.bar(categories, values, color=colors)
+    plt.grid(True, linestyle='--', alpha=0.3, axis='y')
     plt.xticks(range(len(categories)), categories, ha='right')
     plt.xticks(rotation=45, horizontalalignment='right')
     
     for i, value in enumerate(values):
         plt.text(i, value, f'{value:,}', ha='center', va='bottom')
         
+    #plt.tight_layout()
     plt.show()
     
 def stats_couple(couple, focus, alone, single, display=False):
@@ -106,6 +115,7 @@ def stats_couple(couple, focus, alone, single, display=False):
         ax.set_title("Percentage of other categories when "+focus+" is changed")
         plt.xticks(range(len(categories)), categories, ha='right')
         plt.xticks(rotation=45, horizontalalignment='right')
+        plt.tight_layout()
         plt.show()
     for (_,v) in categories.items():
         assert(categories['Alone'] + v <= 100)
@@ -114,7 +124,7 @@ def stats_couple(couple, focus, alone, single, display=False):
 
 def stats_couple_dir(couple, focus, alone, single, display=False):
     colors = ['blue', 'blue', 'blue', 'blue']
-    categories = {'DifferentBranchName': 0, 'ContentModified': 0, 'ContentRemoved': 0, 'ContentDiluted': 0} 
+    categories = {'DifferentBranchName': 0, 'FileModified': 0, 'FileRemoved': 0, 'ContentSplit': 0} 
     categories.pop(focus)
     for ((catA, catB), val) in couple.items():
         if catA == focus:
@@ -128,6 +138,7 @@ def stats_couple_dir(couple, focus, alone, single, display=False):
         ax.set_title("Percentage of other categories when "+focus+" is changed")
         plt.xticks(range(len(categories)), categories, ha='right')
         plt.xticks(rotation=45, horizontalalignment='right')
+        plt.tight_layout()
         plt.show()
     for (categ,v) in categories.items():
         if categ == 'Alone':
@@ -152,6 +163,7 @@ def stats_triple(triple, focus, single, display=False):
         ax.set_title("Percentage of other categories when "+focus+" is changed")
         plt.xticks(range(len(categories)), categories, ha='right')
         plt.xticks(rotation=45, horizontalalignment='right')
+        plt.tight_layout()
         plt.show()
     return categories
         
@@ -171,11 +183,12 @@ def heatmap_couple(couple, alone, single, display=False):
         #hm.xaxis.tick_top()
         #hm.set_title("Heatmap of when 2 changes occur at the same time in percentage")
         plt.xticks(rotation=45, horizontalalignment='right')
+        plt.tight_layout()
         plt.show()
     return mat
 
 def heatmap_couple_dir(couple, alone, single, display=False):
-    y = ['DifferentBranchName', 'ContentModified', 'ContentRemoved', 'ContentDiluted']
+    y = ['DifferentBranchName', 'FileModified', 'FileRemoved', 'ContentSplit']
     mat = np.ndarray((4,5), float, np.zeros((4,5)))
     for i in range(len(y)):
         stat = stats_couple_dir(couple, y[i], alone, single)
@@ -183,13 +196,14 @@ def heatmap_couple_dir(couple, alone, single, display=False):
             mat[i][j] = stat[y[j]]
         mat[i][-1] = stat['Alone']
     if display:
-        x_labels=['DifferentBranchName', 'ContentModified', 'ContentRemoved', 'ContentDiluted', "Alone"]
-        y_labels=['DifferentBranchName', 'ContentModified', 'ContentRemoved', 'ContentDiluted']
+        x_labels=['DifferentBranchName', 'FileModified', 'FileRemoved', 'ContentSplit', "Alone"]
+        y_labels=['DifferentBranchName', 'FileModified', 'FileRemoved', 'ContentSplit']
         hm = sb.heatmap(mat, cmap="crest",annot=True, fmt=".1f", xticklabels=x_labels, yticklabels=y_labels, vmin=0, vmax=100)
         hm.set(xlabel="...this also changes", ylabel="When this changes...")
         #hm.xaxis.tick_top()
         #hm.set_title("Heatmap of when 2 changes occur at the same time in percentage")
         plt.xticks(rotation=45, horizontalalignment='right')
+        plt.tight_layout()
         plt.show()
     return mat
 
@@ -236,6 +250,7 @@ def display_triple(mat, mask=np.ndarray((0,0)), with_mask_couple=False):
     #ht.set_title("Heatmap of when 2 or 3 changes occur at the same time in percentage")
     #plt.xticks(range(len(x)), x, ha='right')
     plt.xticks(rotation=45, horizontalalignment='right')
+    #plt.tight_layout()
     plt.show()
     
     
