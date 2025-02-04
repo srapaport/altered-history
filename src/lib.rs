@@ -566,11 +566,3 @@ pub fn load_checkpoint(opts: &env::Options) -> Option<HashSet<String>> {
 
     return Some(res);
 }
-
-pub fn replace_semicolon(source: &str) -> String {
-    return str::replace(source, ";", "&AlteredCommitSemicolon");
-}
-
-pub fn put_back_semicolon(source: &str) -> String {
-    return str::replace(source,  "&AlteredCommitSemicolon", ";");
-}
