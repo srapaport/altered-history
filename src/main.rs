@@ -56,7 +56,6 @@ fn main() {
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
     info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
 
-
     //Focus
     let start = Instant::now();
     if altered_history::analysis::focus_missing_commits_all_files_with_save(&opts) {

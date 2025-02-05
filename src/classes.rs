@@ -9,11 +9,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 use swh_graph::graph::*;
 use swh_graph::labels::EdgeLabel;
 use swh_graph::mph::DynMphf;
 use swh_graph::NodeType;
-use std::sync::mpsc::channel;
 
 /// returns the (node id, swhid) of the root directory of the given commit
 fn get_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
@@ -443,20 +443,11 @@ where
     match find_revs(rev_mc, succs, graph_t) {
         Some(rev_to_explore) => {
             rev_to_explore.into_iter().for_each(|rev| {
-                if let Some(dir_dst) = get_dir(props.swhid(rev).to_string().as_str(), graph_t){
-                    let changes = compare_dir(
-                        &dir,
-                        &get_list_of_content(
-                            dir_dst,
-                            graph_t,
-                        ),
-                    );
+                if let Some(dir_dst) = get_dir(props.swhid(rev).to_string().as_str(), graph_t) {
+                    let changes = compare_dir(&dir, &get_list_of_content(dir_dst, graph_t));
                     update_changes(&mut res, changes);
-                }else{
-                    warn!(
-                        "couldn't find dir for rev {}",
-                        props.swhid(rev).to_string()
-                    );
+                } else {
+                    warn!("couldn't find dir for rev {}", props.swhid(rev).to_string());
                     env::REV_WITHOUT_DIR.fetch_add(1, Ordering::Relaxed);
                 }
             });
@@ -612,7 +603,7 @@ fn file_classification<
 >(
     filename: &str,
     opts: &env::Options,
-    graph_t: &G, 
+    graph_t: &G,
     progress: &MultiProgress,
 ) -> Option<HashMap<(String, String, String, String, String, Option<String>), env::Categ>>
 where
@@ -628,23 +619,30 @@ where
         .expect(&format!("couldn't load results from {}", filename));
 
     let (tx, rx) = channel::<
-        Option<((String, String, String, String, String, Option<String>), env::Categ)>,
+        Option<(
+            (String, String, String, String, String, Option<String>),
+            env::Categ,
+        )>,
     >();
     let length = file_results.len();
     let bar = progress.add(ProgressBar::new(length as u64));
-    bar.set_style(ProgressStyle::with_template("{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}").unwrap());
+    bar.set_style(
+        ProgressStyle::with_template(
+            "{msg} {wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
+        )
+        .unwrap(),
+    );
     bar.set_message(format!("Classifying {}", filename));
     file_results.into_par_iter().for_each(|line| {
-        let tx = tx.clone(); 
+        let tx = tx.clone();
         let package = line_classification(line.clone(), graph_t);
-        tx.send(package).expect(format!("Failed sending the msg to classify the commit {:?}", line.3).as_str());
+        tx.send(package)
+            .expect(format!("Failed sending the msg to classify the commit {:?}", line.3).as_str());
         bar.inc(1);
-        
     });
-    for _ in 0..length{
-        if let Ok(package) = rx.recv(){
-            
-            if let Some(data) = package{
+    for _ in 0..length {
+        if let Ok(package) = rx.recv() {
+            if let Some(data) = package {
                 res.insert(data.0, data.1);
             }
         }
@@ -661,7 +659,10 @@ fn line_classification<
     //res: &mut HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
     line: (String, String, String, String, String),
     graph_t: &G,
-) -> Option<((String, String, String, String, String, Option<String>), env::Categ)>
+) -> Option<(
+    (String, String, String, String, String, Option<String>),
+    env::Categ,
+)>
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
@@ -689,7 +690,10 @@ where
                 //     (line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)),
                 //     categ,
                 // );
-                return Some(((line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)), categ));
+                return Some((
+                    (line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)),
+                    categ,
+                ));
             }
             None => {
                 //DIR changes
@@ -766,53 +770,56 @@ pub fn classification_all(opts: &env::Options) -> bool {
     bar_file.set_message("Amount of Files Classified");
     let count_file = AtomicUsize::new(0);
     //pool.install(|| {
-        //rayon::scope(|thread| {
-            fs::read_dir(prefix.clone())
-                .expect("can't read dir")
-                .into_iter()
-                .for_each(|file| {
-                    //thread.spawn(|_| {
-                        let filename = &file
-                            .unwrap()
-                            .path()
-                            .file_name()
-                            .unwrap()
-                            .to_os_string()
-                            .into_string()
-                            .unwrap();
-                        info!("file class: {}", filename);
-                        if env::RE_CSV.is_match(&filename) {
-                            info!("parsing: {}", filename);
-                            let name = &env::RE_FILENAME_WITHOUT_EXT
-                                .captures(filename)
-                                .expect("couldn't etract name of the csv file")[1];
-                            let filename_dst = format!("{}/classes/{}_class.csv", prefix, name);
-                            match fs::metadata(&filename_dst) {
-                                Ok(_) => warn!("classes.rs > classification_all | File {} already exists", filename_dst), //file already exists -> do nothing
-                                Err(_) => {
-                                    let thread_id = unsafe { gettid() };
-                                    info!(
-                                        "Computing file: {} | with pid: {:?}",
-                                        format!("focus/{}", filename),
-                                        thread_id
-                                    );
-                                    if let Some(p) = file_classification(
-                                        &format!("focus/{}", filename),
-                                        opts,
-                                        &graph_t,
-                                        &multi_bar,
-                                    ) {
-                                        save_categ(opts, &filename_dst, p, &multi_bar);
-                                    }
-                                }
-                            }
+    //rayon::scope(|thread| {
+    fs::read_dir(prefix.clone())
+        .expect("can't read dir")
+        .into_iter()
+        .for_each(|file| {
+            //thread.spawn(|_| {
+            let filename = &file
+                .unwrap()
+                .path()
+                .file_name()
+                .unwrap()
+                .to_os_string()
+                .into_string()
+                .unwrap();
+            info!("file class: {}", filename);
+            if env::RE_CSV.is_match(&filename) {
+                info!("parsing: {}", filename);
+                let name = &env::RE_FILENAME_WITHOUT_EXT
+                    .captures(filename)
+                    .expect("couldn't etract name of the csv file")[1];
+                let filename_dst = format!("{}/classes/{}_class.csv", prefix, name);
+                match fs::metadata(&filename_dst) {
+                    Ok(_) => warn!(
+                        "classes.rs > classification_all | File {} already exists",
+                        filename_dst
+                    ), //file already exists -> do nothing
+                    Err(_) => {
+                        let thread_id = unsafe { gettid() };
+                        info!(
+                            "Computing file: {} | with pid: {:?}",
+                            format!("focus/{}", filename),
+                            thread_id
+                        );
+                        if let Some(p) = file_classification(
+                            &format!("focus/{}", filename),
+                            opts,
+                            &graph_t,
+                            &multi_bar,
+                        ) {
+                            save_categ(opts, &filename_dst, p, &multi_bar);
                         }
-                        count_file.fetch_add(1, Ordering::Relaxed);
-                        let curr_nb_file = count_file.load(Ordering::Relaxed) as u64;
-                        bar_file.set_position(curr_nb_file);
-                    //});
-                });
-        //});
+                    }
+                }
+            }
+            count_file.fetch_add(1, Ordering::Relaxed);
+            let curr_nb_file = count_file.load(Ordering::Relaxed) as u64;
+            bar_file.set_position(curr_nb_file);
+            //});
+        });
+    //});
     //});
 
     bar_file.finish_with_message("Finished Classifying all Files");
@@ -828,13 +835,15 @@ fn save_categ(
     let prefix = format!("{}/focus/classes", opts.results);
     //Check if directory exists already
     if let Err(_) = fs::metadata(&prefix) {
-        fs::create_dir(&prefix)
-            .expect(format!("couldn't create directory: {}", &prefix).as_str());
+        fs::create_dir(&prefix).expect(format!("couldn't create directory: {}", &prefix).as_str());
         //Create new directory
     }
 
-    if let Ok(_) = fs::metadata(filename){
-        warn!("classes.rs > save_categ | File {} already exists!", filename);
+    if let Ok(_) = fs::metadata(filename) {
+        warn!(
+            "classes.rs > save_categ | File {} already exists!",
+            filename
+        );
         return;
     }
     // let Ok(mut file_w) = File::create_new(filename) else {
@@ -850,15 +859,16 @@ fn save_categ(
         .unwrap(),
     );
     bar.set_message(format!("Saving Classified Data in {}", filename));
-    let (tx, rx) = channel::<
-        env::AlteredCommit,
-    >();
-    let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(filename).unwrap();
+    let (tx, rx) = channel::<env::AlteredCommit>();
+    let mut csv_wrt = csv::WriterBuilder::new()
+        .delimiter(b';')
+        .from_path(filename)
+        .unwrap();
     // file_w
     //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories\n".as_bytes())
     //     .expect(format!("couldn't write headings in file: {}", filename).as_str());
     map.into_par_iter().for_each(|(k, v)| {
-        let record = env::AlteredCommit{
+        let record = env::AlteredCommit {
             origin: k.0,
             snapshot_src: k.1,
             branch_name: k.2,
@@ -868,14 +878,20 @@ fn save_categ(
             main_category: Some(v.main_categ),
             sub_categories: {
                 let mut subcateg = String::new();
-                v.sub_categ.into_iter().for_each(|sub|{
-                    subcateg = format!("{},{}",subcateg , sub.to_string());
+                v.sub_categ.into_iter().for_each(|sub| {
+                    subcateg = format!("{},{}", subcateg, sub.to_string());
                 });
                 Some(subcateg)
             },
         };
         let tx = tx.clone();
-        tx.send(record).expect(format!("failed sending the record for classifying {} in file {}", k.3, filename).as_str());
+        tx.send(record).expect(
+            format!(
+                "failed sending the record for classifying {} in file {}",
+                k.3, filename
+            )
+            .as_str(),
+        );
         bar.inc(1);
         // file_w
         //     .write(
@@ -887,18 +903,26 @@ fn save_categ(
         //     )
         //     .expect(format!("couldn't write datas in file: {}", filename).as_str());
     });
-    for _ in 0..length{
-        if let Ok(package) = rx.recv(){
+    for _ in 0..length {
+        if let Ok(package) = rx.recv() {
             let mc = package.missing_commit.clone();
-            csv_wrt.serialize(package).expect(format!("Couldn't serialize classified data {} in file {}", mc, filename).as_str());
+            csv_wrt.serialize(package).expect(
+                format!(
+                    "Couldn't serialize classified data {} in file {}",
+                    mc, filename
+                )
+                .as_str(),
+            );
         }
     }
     bar.finish_with_message(format!("Done Saving Classified Data in {}", filename));
     progress.remove(&bar);
 }
 
-pub fn classification_single_origin(opts: &env::Options, roots: HashSet<(String, String, String, String, String)>)
--> HashMap<(String, String, String, String, String, Option<String>), env::Categ>{
+pub fn classification_single_origin(
+    opts: &env::Options,
+    roots: HashSet<(String, String, String, String, String)>,
+) -> HashMap<(String, String, String, String, String, Option<String>), env::Categ> {
     let graph_name: String = opts.graph.clone();
 
     let graph_t = SwhBidirectionalGraph::new(PathBuf::from(graph_name))
@@ -917,25 +941,22 @@ pub fn classification_single_origin(opts: &env::Options, roots: HashSet<(String,
         .load_labels()
         .expect("Could not load labels");
 
-        let mut res = HashMap::new();
-        roots.into_iter().for_each(|root|{
-            if let Some(p) = line_classification(
-                root,
-                &graph_t,
-            ) {
-                res.insert(p.0, p.1);
-            }
-        });
-        println!("------ Classes ------");
-        res.iter().for_each(|(commit, categ)| {
-            println!("Snapshot with altered commit: {}", commit.1);
-            println!("Branch name: {}", commit.2); 
-            println!("Altered commit: {}", commit.3);
-            println!("Snapshot without altered commit: {}", commit.4);
-            println!("First Diff: {:?}", commit.5);
-            println!("Main categ: {}", categ.main_categ);
-            println!("Sub categ: {:?}", categ.sub_categ);
-            println!("---");
-        });
-        return res;
+    let mut res = HashMap::new();
+    roots.into_iter().for_each(|root| {
+        if let Some(p) = line_classification(root, &graph_t) {
+            res.insert(p.0, p.1);
+        }
+    });
+    println!("------ Classes ------");
+    res.iter().for_each(|(commit, categ)| {
+        println!("Snapshot with altered commit: {}", commit.1);
+        println!("Branch name: {}", commit.2);
+        println!("Altered commit: {}", commit.3);
+        println!("Snapshot without altered commit: {}", commit.4);
+        println!("First Diff: {:?}", commit.5);
+        println!("Main categ: {}", categ.main_categ);
+        println!("Sub categ: {:?}", categ.sub_categ);
+        println!("---");
+    });
+    return res;
 }

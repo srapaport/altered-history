@@ -26,8 +26,9 @@ pub struct Visits {
     pub snapshots: HashMap<String, Vec<i64>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]//
-pub struct AlteredCommit {//origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories
+#[derive(Serialize, Deserialize, Debug)] //
+pub struct AlteredCommit {
+    //origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories
     pub origin: String,
     pub snapshot_src: String,
     pub branch_name: String,
@@ -56,10 +57,11 @@ pub static REV_WITHOUT_DIR: AtomicUsize = AtomicUsize::new(0);
 // pub static BRANCHES_REJECTED: AtomicUsize = AtomicUsize::new(0);
 // pub static TOTAL_REV_ANALYZED: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone, Default, Copy)]
 pub enum MainCateg {
     META,
     DIR,
+    #[default]
     LoadingIssue,
 }
 
@@ -73,7 +75,7 @@ impl fmt::Display for MainCateg {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone, Default, Copy)]
 pub enum SubCateg {
     Message,
     Author,
@@ -85,6 +87,8 @@ pub enum SubCateg {
     FileModified,
     FileRemoved,
     ContentSplit,
+    #[default]
+    Other,
 }
 
 impl fmt::Display for SubCateg {
@@ -100,6 +104,7 @@ impl fmt::Display for SubCateg {
             SubCateg::FileModified => write!(f, "FileModified"),
             SubCateg::FileRemoved => write!(f, "FileRemoved"),
             SubCateg::ContentSplit => write!(f, "ContentSplit"),
+            SubCateg::Other => write!(f, "Other"),
         }
     }
 }
