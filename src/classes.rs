@@ -896,3 +896,46 @@ fn save_categ(
     bar.finish_with_message(format!("Done Saving Classified Data in {}", filename));
     progress.remove(&bar);
 }
+
+pub fn classification_single_origin(opts: &env::Options, roots: HashSet<(String, String, String, String, String)>)
+-> HashMap<(String, String, String, String, String, Option<String>), env::Categ>{
+    let graph_name: String = opts.graph.clone();
+
+    let graph_t = SwhBidirectionalGraph::new(PathBuf::from(graph_name))
+        .expect("Could not load graph")
+        .init_properties()
+        .load_properties(|properties| properties.load_maps::<DynMphf>())
+        .expect("Could not load maps")
+        .load_properties(|properties| properties.load_timestamps())
+        .expect("Could not load timestamps")
+        .load_properties(|properties| properties.load_persons())
+        .expect("Could not load persons")
+        .load_properties(|properties| properties.load_strings())
+        .expect("Could not load strings")
+        .load_properties(|properties| properties.load_label_names())
+        .expect("Could no load label names")
+        .load_labels()
+        .expect("Could not load labels");
+
+        let mut res = HashMap::new();
+        roots.into_iter().for_each(|root|{
+            if let Some(p) = line_classification(
+                root,
+                &graph_t,
+            ) {
+                res.insert(p.0, p.1);
+            }
+        });
+        println!("------ Classes ------");
+        res.iter().for_each(|(commit, categ)| {
+            println!("Snapshot with altered commit: {}", commit.1);
+            println!("Branch name: {}", commit.2); 
+            println!("Altered commit: {}", commit.3);
+            println!("Snapshot without altered commit: {}", commit.4);
+            println!("First Diff: {:?}", commit.5);
+            println!("Main categ: {}", categ.main_categ);
+            println!("Sub categ: {:?}", categ.sub_categ);
+            println!("---");
+        });
+        return res;
+}

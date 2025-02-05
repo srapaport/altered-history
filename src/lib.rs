@@ -408,7 +408,7 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                                 graph.properties().swhid(snap).to_string()
                                             })
                                             .filter(|snap|{
-                                                snap != "swh:1:snp:1a8893e6a86f444e8be8e7bda6cb34fb1735a00e"
+                                                snap != env::EMPTY_SNAPSHOT_SWHID
                                             })
                                             .collect();
                                     debug!("    sorted snapshots: {:?}", sorted_snapshots);
@@ -565,4 +565,63 @@ pub fn load_checkpoint(opts: &env::Options) -> Option<HashSet<String>> {
     }
 
     return Some(res);
+}
+
+pub fn main_single_origin(opts: &env::Options, origin: &str) -> Option<HashSet<(String, String, String, String)>>{
+    let graph_path = PathBuf::from(opts.graph.as_str());
+    let removed_branch = opts.removed_branch;
+
+    let graph = SwhUnidirectionalGraph::new(graph_path)
+        .expect("Could not load graph")
+        .init_properties()
+        .load_properties(|properties| properties.load_maps::<DynMphf>())
+        .expect("Could not load maps")
+        .load_properties(|properties| properties.load_label_names())
+        .expect("Could no load label names")
+        .load_properties(|properties| properties.load_strings())
+        .expect("Could no load strings")
+        .load_labels()
+        .expect("Could not load labels");
+
+        let ori_swhid = format!("swh:1:ori:{}", sha1_smol::Sha1::from(origin).digest().to_string());
+        let ori_node = graph.properties().node_id(ori_swhid.as_str()).expect(format!("couldn't find node id for swhid {} for origin {}", ori_swhid, origin).as_str());
+
+        let sorted_snapshots: Vec<String> =
+            retrieve_sorted_snapshots(ori_node, &graph)
+                .unwrap()
+                .into_iter()
+                .map(|(snap, _)| {
+                    graph.properties().swhid(snap).to_string()
+                })
+                .filter(|snap|{
+                    snap != env::EMPTY_SNAPSHOT_SWHID
+                })
+                .collect();
+        debug!("    sorted snapshots: {:?}", sorted_snapshots);
+
+        ///////////// altered_commits
+        if let Some(curr_altered_commits) = altered_commits(
+            &mut VecDeque::from(sorted_snapshots),
+            removed_branch,
+            &graph,
+        ) {
+            info!(
+                "Missing commits in {}",
+                ori_swhid
+            );
+            curr_altered_commits.iter().for_each(|ac| {
+                println!("Snapshot with altered commit: {}", ac.0);
+                println!("Branch name: {}", ac.1); 
+                println!("Altered commit: {}", ac.2);
+                println!("Snapshot without altered commit: {}", ac.3);
+                println!("---");
+            });
+            return Some(curr_altered_commits);
+        } else {
+            info!(
+                "No missing commits in {}",
+                ori_swhid
+            );
+        }
+        None
 }

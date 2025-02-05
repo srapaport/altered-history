@@ -41,6 +41,7 @@ pub struct AlteredCommit {//origin;snapshot_src;branch_name;missing_commit;snaps
 pub const ORIGINS_2021: usize = 2_181;
 pub const ORIGINS_FULL: usize = 226_726_529;
 pub const EMPTY_SNAPSHOT: &str = "1a8893e6a86f444e8be8e7bda6cb34fb1735a00e";
+pub const EMPTY_SNAPSHOT_SWHID: &str = "swh:1:snp:1a8893e6a86f444e8be8e7bda6cb34fb1735a00e";
 pub static RE_BRANCH: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^refs/heads/(main|master|dev|devel|develop|development)$").unwrap());
 pub static RE_CSV: Lazy<Regex> = Lazy::new(|| Regex::new(r".*\.csv$").unwrap());

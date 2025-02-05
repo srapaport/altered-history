@@ -5,7 +5,6 @@ use log::{info, warn};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use swh_graph::graph::*;
 use swh_graph::mph::DynMphf;
 use rayon::prelude::*;
@@ -210,7 +209,6 @@ pub fn load_file_results(
     opts: &env::Options,
     filename: &str,
 ) -> Option<HashSet<(String, String, String, String, String)>> {
-    /// Parallelize if possible / relevant
     let prefix: &str = opts.results.as_str();
     let mut res = HashSet::new();
 
@@ -244,4 +242,40 @@ pub fn load_file_results(
             }
         });
     return Some(res);
+}
+
+pub fn focus_missing_commits_single_origin(opts: &env::Options, mc: &HashSet<(String, String, String, String, String)>)-> HashSet<(String, String, String, String, String)>{
+    let graph_name: &str = opts.graph.as_str();
+
+    let graph = SwhUnidirectionalGraph::new(PathBuf::from(graph_name))
+        .expect("Could not load graph")
+        .init_properties()
+        .load_properties(|properties| properties.load_maps::<DynMphf>())
+        .expect("Could not load maps")
+        .load_properties(|properties| properties.load_timestamps())
+        .expect("Could not load timestamps")
+        .load_properties(|properties| properties.load_persons())
+        .expect("Could not load persons")
+        .load_properties(|properties| properties.load_strings())
+        .expect("Could not load strings")
+        .load_properties(|properties| properties.load_label_names())
+        .expect("Could no load label names")
+        .load_labels()
+        .expect("Could not load labels");
+                
+    let focus = focus_missing_commits(
+        mc,
+        &graph,
+        None,
+        &MultiProgress::new(),
+    );
+    println!("------ Root Cause Commits ------");
+    focus.iter().for_each(|ac| {
+        println!("Snapshot with altered commit: {}", ac.1);
+        println!("Branch name: {}", ac.2); 
+        println!("Altered commit: {}", ac.3);
+        println!("Snapshot without altered commit: {}", ac.4);
+        println!("---");
+    });
+    focus
 }
