@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod classes;
 pub mod env;
+pub mod orc_gen;
 use anyhow::{ensure, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
@@ -62,12 +63,11 @@ where
     let mut swhid1 = snapshots.pop_front().unwrap();
     debug!("swhid1: {swhid1}");
 
-    let mut swhid1_heads : HashMap<String, usize>;
-    match branches_head(&swhid1, graph){
-        None => { return None}
-        Some(b) => {swhid1_heads = b}
+    let mut swhid1_heads: HashMap<String, usize>;
+    match branches_head(&swhid1, graph) {
+        None => return None,
+        Some(b) => swhid1_heads = b,
     }
-    
 
     let mut swhid1_commits: HashMap<String, HashSet<usize>> = HashMap::new();
 
@@ -81,9 +81,9 @@ where
         }
 
         let swhid2_heads: HashMap<String, usize>;
-        match branches_head(&swhid2, graph){
-            None => {return None}
-            Some(b) => {swhid2_heads = b}
+        match branches_head(&swhid2, graph) {
+            None => return None,
+            Some(b) => swhid2_heads = b,
         }
 
         let mut swhid2_commits: HashMap<String, HashSet<usize>> = HashMap::new();
@@ -183,7 +183,7 @@ fn branches_head<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
-{ 
+{
     //let start = Instant::now();
     let props = graph.properties();
     if graph
@@ -214,27 +214,27 @@ where
             let mut to_visit = VecDeque::new();
             to_visit.push_back(succ);
             let mut visited = HashSet::new();
-            'visit: while let Some(node) = to_visit.pop_front(){
-                if visited.contains(&node){
+            'visit: while let Some(node) = to_visit.pop_front() {
+                if visited.contains(&node) {
                     continue;
                 }
                 visited.insert(node);
                 let successors = graph.successors(node);
                 for succ in successors {
-                    match props.node_type(succ){
-                        NodeType::Revision=>{
+                    match props.node_type(succ) {
+                        NodeType::Revision => {
                             head = Some(succ);
                             break 'visit;
                         }
-                        NodeType::Release=>{
+                        NodeType::Release => {
                             //info!("RELEASE");
                             to_visit.push_back(succ);
                         }
-                        _ => ()
+                        _ => (),
                     }
                 }
-            } 
-            if head == None{
+            }
+            if head == None {
                 return None;
             }
         }
@@ -250,7 +250,7 @@ where
             }
         }
     }
-    if heads.len() == 0{
+    if heads.len() == 0 {
         return None;
     }
     //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
@@ -407,9 +407,7 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                             .map(|(snap, _)| {
                                                 graph.properties().swhid(snap).to_string()
                                             })
-                                            .filter(|snap|{
-                                                snap != env::EMPTY_SNAPSHOT_SWHID
-                                            })
+                                            .filter(|snap| snap != env::EMPTY_SNAPSHOT_SWHID)
                                             .collect();
                                     debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
@@ -439,7 +437,8 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                     }
                                 } else {
                                     env::ORI_REJECTED.fetch_add(1, Ordering::Relaxed);
-                                    tx.send(Some((ori_swhid, String::new(), None))).expect("Failed sending the msg");
+                                    tx.send(Some((ori_swhid, String::new(), None)))
+                                        .expect("Failed sending the msg");
                                 }
                             } else {
                                 info!(
@@ -487,21 +486,27 @@ fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, St
     let swhid = format!("{}", map.iter().next().unwrap().1.iter().next().unwrap().0);
     let filename = format!("{}/{}.csv", prefix, swhid);
     let filename_tmp = format!("{}/{}.tmp", prefix, swhid);
-    if let Ok(_) = fs::metadata(&filename_tmp){
-        warn!("lib.rs > flush_map | File {} already exists!", &filename_tmp);
+    if let Ok(_) = fs::metadata(&filename_tmp) {
+        warn!(
+            "lib.rs > flush_map | File {} already exists!",
+            &filename_tmp
+        );
         return;
     }
     // let Ok(mut file_w) = File::create_new(format!("{}", filename_tmp)) else {
     //     warn!("File {} already exists!", filename_tmp);
     //     return;
     // };
-    let mut csv_wrt = csv::WriterBuilder::new().delimiter(b';').from_path(filename_tmp.as_str()).unwrap();
+    let mut csv_wrt = csv::WriterBuilder::new()
+        .delimiter(b';')
+        .from_path(filename_tmp.as_str())
+        .unwrap();
     // file_w
     //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
     //     .expect(format!("couldn't write headings in file: {}", filename_tmp).as_str());
     map.iter().for_each(|v| {
         v.1.iter().for_each(|set| {
-            let record = env::AlteredCommit{
+            let record = env::AlteredCommit {
                 origin: v.0.to_string(),
                 snapshot_src: set.0.to_string(),
                 branch_name: set.1.to_string(),
@@ -567,7 +572,10 @@ pub fn load_checkpoint(opts: &env::Options) -> Option<HashSet<String>> {
     return Some(res);
 }
 
-pub fn main_single_origin(opts: &env::Options, origin: &str) -> Option<HashSet<(String, String, String, String)>>{
+pub fn main_single_origin(
+    opts: &env::Options,
+    origin: &str,
+) -> Option<HashSet<(String, String, String, String)>> {
     let graph_path = PathBuf::from(opts.graph.as_str());
     let removed_branch = opts.removed_branch;
 
@@ -583,45 +591,43 @@ pub fn main_single_origin(opts: &env::Options, origin: &str) -> Option<HashSet<(
         .load_labels()
         .expect("Could not load labels");
 
-        let ori_swhid = format!("swh:1:ori:{}", sha1_smol::Sha1::from(origin).digest().to_string());
-        let ori_node = graph.properties().node_id(ori_swhid.as_str()).expect(format!("couldn't find node id for swhid {} for origin {}", ori_swhid, origin).as_str());
+    let ori_swhid = format!(
+        "swh:1:ori:{}",
+        sha1_smol::Sha1::from(origin).digest().to_string()
+    );
+    let ori_node = graph.properties().node_id(ori_swhid.as_str()).expect(
+        format!(
+            "couldn't find node id for swhid {} for origin {}",
+            ori_swhid, origin
+        )
+        .as_str(),
+    );
 
-        let sorted_snapshots: Vec<String> =
-            retrieve_sorted_snapshots(ori_node, &graph)
-                .unwrap()
-                .into_iter()
-                .map(|(snap, _)| {
-                    graph.properties().swhid(snap).to_string()
-                })
-                .filter(|snap|{
-                    snap != env::EMPTY_SNAPSHOT_SWHID
-                })
-                .collect();
-        debug!("    sorted snapshots: {:?}", sorted_snapshots);
+    let sorted_snapshots: Vec<String> = retrieve_sorted_snapshots(ori_node, &graph)
+        .unwrap()
+        .into_iter()
+        .map(|(snap, _)| graph.properties().swhid(snap).to_string())
+        .filter(|snap| snap != env::EMPTY_SNAPSHOT_SWHID)
+        .collect();
+    debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
-        ///////////// altered_commits
-        if let Some(curr_altered_commits) = altered_commits(
-            &mut VecDeque::from(sorted_snapshots),
-            removed_branch,
-            &graph,
-        ) {
-            info!(
-                "Missing commits in {}",
-                ori_swhid
-            );
-            curr_altered_commits.iter().for_each(|ac| {
-                println!("Snapshot with altered commit: {}", ac.0);
-                println!("Branch name: {}", ac.1); 
-                println!("Altered commit: {}", ac.2);
-                println!("Snapshot without altered commit: {}", ac.3);
-                println!("---");
-            });
-            return Some(curr_altered_commits);
-        } else {
-            info!(
-                "No missing commits in {}",
-                ori_swhid
-            );
-        }
-        None
+    ///////////// altered_commits
+    if let Some(curr_altered_commits) = altered_commits(
+        &mut VecDeque::from(sorted_snapshots),
+        removed_branch,
+        &graph,
+    ) {
+        info!("Missing commits in {}", ori_swhid);
+        curr_altered_commits.iter().for_each(|ac| {
+            println!("Snapshot with altered commit: {}", ac.0);
+            println!("Branch name: {}", ac.1);
+            println!("Altered commit: {}", ac.2);
+            println!("Snapshot without altered commit: {}", ac.3);
+            println!("---");
+        });
+        return Some(curr_altered_commits);
+    } else {
+        info!("No missing commits in {}", ori_swhid);
+    }
+    None
 }
