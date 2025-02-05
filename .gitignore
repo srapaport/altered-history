@@ -30,3 +30,4 @@ __pycache__/
 **/*.log
 **/*.csv
 **/*.pkl
+**/*old*
