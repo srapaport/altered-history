@@ -1,6 +1,10 @@
 use csv;
 use serde::{Deserialize, Serialize};
 fn main(){ 
+    altered_history::orc_gen::csv_to_orc("./test.csv", "./test.orc");    
+}
+
+fn _test(){
     #[derive(Serialize, Deserialize, Debug)]
     struct ReadTest{
         origin: String,
@@ -18,10 +22,4 @@ fn main(){
         let record: ReadTest = result.unwrap();
         println!("result: {:#?}", record);
     }
-    // for result in csv_rdr.records(){
-    //     let record = result.unwrap();
-    //     println!("origin: {:?}", &record[0]);
-    //     println!("amount of, snapshots: {:?}", &record[1]);
-    // }
 }
-

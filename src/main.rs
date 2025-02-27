@@ -8,19 +8,20 @@ use std::time::Instant;
 
 fn main() {
     //let opts = altered_history::env::Options::parse();
-    let opts = altered_history::env::Options {
+    let _opts = altered_history::env::Options {
         graph: String::from("/poolswh/softwareheritage/graph/2024-08-23/compressed/graph"),
-        //graph: String::from("/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph"),
-        // graph: String::from(
-        //     "/infres/ir800/rapaport/datasets/2021-03-23-popular-3k-python-graph/graph",
-        // ),
         results: String::from("/infres/ir800/rapaport/results/FULL_2024_08_v2"),
-        //results: String::from("./results_2024"),
         expected_origins: 310_334_314,
-        //expected_origins: 2_181,
-        //expected_origins: 443,
-        //chunk: 10,
         chunk: 50_000,
+        removed_branch: false,
+    };
+    let opts = altered_history::env::Options {
+        graph: String::from(
+            "/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph",
+        ),
+        results: String::from("./results_2024"),
+        expected_origins: 443,
+        chunk: 10,
         removed_branch: false,
     };
 
@@ -29,7 +30,7 @@ fn main() {
             flexi_logger::FileSpec::default()
                 // .directory("/infres/ir800/rapaport/results/FULL_new/logs")
                 // .basename("FULL-all")
-                .directory("./test_logs")
+                .directory(format!("{}/logs", opts.results))
                 .basename("FULL_2024")
                 .suffix("log"),
         )

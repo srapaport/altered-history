@@ -198,7 +198,6 @@ pub fn focus_missing_commits_all_files_with_save(opts: &env::Options) -> bool {
                 match fs::metadata(&filename_dst) {
                                 Ok(_) => warn!("analysis.rs > focus_missing_commits_all_files_with_save | File {} already exists", filename), //file already exists -> do nothing
                                 Err(_) => {
-                                    
                                     focus_missing_commits(
                                         &load_file_results(&opts, &filename).unwrap(),
                                         &graph,

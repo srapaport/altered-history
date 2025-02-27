@@ -2,7 +2,7 @@ use flexi_logger::{Cleanup, Criterion, Duplicate, Logger, Naming};
 use log::LevelFilter;
 use std::{path::PathBuf, time::Instant};
 use swh_graph::{
-    graph::SwhBidirectionalGraph,
+    graph::{SwhBidirectionalGraph, SwhGraphWithProperties, SwhLabeledForwardGraph},
     mph::DynMphf,
     SwhGraphProperties,
 };
@@ -42,7 +42,7 @@ fn main(){
         removed_branch: false,
     };
 
-    let _graph = SwhBidirectionalGraph::new(PathBuf::from(
+    let graph = SwhBidirectionalGraph::new(PathBuf::from(
         "/poolswh/softwareheritage/graph/2024-08-23/compressed/graph",
     ))
         .expect("Could not load graph")
@@ -57,7 +57,7 @@ fn main(){
         .expect("Could not load strings");
 
 
-    let start = Instant::now();
+    /* let start = Instant::now();
 
     let origin = "https://github.com/srapaport/missing_commits";
     let Some(mc) = altered_history::main_single_origin(&opts, origin) else{
@@ -68,5 +68,13 @@ fn main(){
     let roots = altered_history::analysis::focus_missing_commits_single_origin(&opts, &mc);
     let _classes = altered_history::classes::classification_single_origin(&opts, roots);
 
-    println!("time elapsed: {:.2?}", start.elapsed());
+    println!("time elapsed: {:.2?}", start.elapsed()); */
+
+    /* let swhid = "swh:1:rev:2b871f4dbffe3801d0da3f89806b5935f758d5f3";
+    for (_, labels) in graph.labeled_successors(graph.properties().node_id(swhid).unwrap()){
+        for label in labels{
+
+        }
+    } */
+
 }

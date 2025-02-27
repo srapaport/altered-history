@@ -339,7 +339,6 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
         Some(cp) => checkpoint = cp,
         None => checkpoint = HashSet::new(),
     }
-
     let (tx, rx) = channel::<
         Option<(
             String,
@@ -347,8 +346,9 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
             Option<HashSet<(String, String, String, String)>>,
         )>,
     >();
-
     let jh = thread::spawn(move || {
+        let amount_of_ori_kept = AtomicUsize::new(0);
+        let amount_of_ori_less_2_visit = AtomicUsize::new(0);
         let workers = (num_cpus::get() / 3) * 2;
         let graph = SwhUnidirectionalGraph::new(graph_path)
             .expect("Could not load graph")
@@ -374,13 +374,24 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
             )
             .unwrap(),
         );
-
         pool.install(|| {
             rayon::scope(|thread| {
                 for ori in 0..graph.num_nodes() {
                     if graph.properties().node_type(ori) != NodeType::Origin {
                         continue;
                     }
+                    let mut amount_visit = 0;
+                    graph
+                        .labeled_successors(ori)
+                        .into_iter()
+                        .for_each(|(_, labels)| {
+                            amount_visit += labels.into_iter().count();
+                        });
+                    if amount_visit <= 1 {
+                        amount_of_ori_less_2_visit.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    amount_of_ori_kept.fetch_add(1, Ordering::Relaxed);
                     thread.spawn({
                         let tx = tx.clone();
                         let count_origins = &count_origins;
@@ -455,6 +466,14 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
             });
         });
         bar.finish_and_clear();
+        println!(
+            "Amount of origins kept: {}",
+            amount_of_ori_kept.load(Ordering::Relaxed)
+        );
+        println!(
+            "Amount of origins ignored (less than 2 visits): {}",
+            amount_of_ori_less_2_visit.load(Ordering::Relaxed)
+        );
     });
     // Receive results in parallel and write them at the frequency of opts.chunk
     let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();

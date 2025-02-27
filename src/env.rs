@@ -26,7 +26,7 @@ pub struct Visits {
     pub snapshots: HashMap<String, Vec<i64>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)] //
+#[derive(Serialize, Deserialize, Debug, Clone)] //
 pub struct AlteredCommit {
     //origin;snapshot_src;branch_name;missing_commit;snapshot_dst;first_difference;main_category;sub_categories
     pub origin: String,
