@@ -389,6 +389,7 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                         });
                     if amount_visit <= 1 {
                         amount_of_ori_less_2_visit.fetch_add(1, Ordering::Relaxed);
+                        tx.send(None).expect("Failed sending the msg, less than 2 visits");
                         continue;
                     }
                     amount_of_ori_kept.fetch_add(1, Ordering::Relaxed);
