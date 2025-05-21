@@ -349,7 +349,7 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
     let jh = thread::spawn(move || {
         let amount_of_ori_kept = AtomicUsize::new(0);
         let amount_of_ori_less_2_visit = AtomicUsize::new(0);
-        let workers = (num_cpus::get() / 3) * 2;
+        let workers = num_cpus::get() / 3;
         let graph = SwhUnidirectionalGraph::new(graph_path)
             .expect("Could not load graph")
             .init_properties()

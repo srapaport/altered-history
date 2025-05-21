@@ -8,14 +8,14 @@ use std::time::Instant;
 
 fn main() {
     //let opts = altered_history::env::Options::parse();
-    let _opts = altered_history::env::Options {
+    let opts = altered_history::env::Options {
         graph: String::from("/poolswh/softwareheritage/graph/2024-08-23/compressed/graph"),
         results: String::from("/infres/ir800/rapaport/results/FULL_2024_08_v2"),
         expected_origins: 310_334_314,
         chunk: 50_000,
         removed_branch: false,
     };
-    let opts = altered_history::env::Options {
+    let _opts = altered_history::env::Options {
         graph: String::from(
             "/infres/ir800/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph",
         ),
