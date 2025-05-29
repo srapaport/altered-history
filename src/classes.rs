@@ -732,7 +732,7 @@ extern "C" {
 }
 
 /// Classify all altered commits from results files in focus
-pub fn classification_all(opts: &env::Options) -> bool {
+pub fn categorization_all(opts: &env::Options) -> bool {
     let prefix: String = format!("{}/focus", opts.results);
     let graph_name: String = opts.graph.clone();
 
