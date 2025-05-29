@@ -1,0 +1,8 @@
+START
+Amount of origins kept: 111008539
+Amount of origins ignored (less than 2 visits): 199325775
+Origins rejected: 6
+Main work complete | time elapsed: 14918.67s
+Focus complete | time elapsed: 106389.80s
+Classification complete | time elapsed: 491854.59s
+Rev without a dir: 1493

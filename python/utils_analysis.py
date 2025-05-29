@@ -61,6 +61,79 @@ def display_single(stats):
     plt.tight_layout()
         
     plt.show()
+
+def display_single_dual_scale(stats1, stats2, df, df_1000_stars, title="Comparison of Change Types",
+                             label1="All Repositories", label2="Repositories with 1000+ Stars",
+                             color1='#1f77b4', color2='#ff7f0e'):
+    """
+    Display two datasets on the same graph with bars side by side for easier comparison.
+    
+    Args:
+        stats1: First dataset (typically larger numbers)
+        stats2: Second dataset (typically smaller numbers)
+        title: Title for the plot
+        label1: Legend label for first dataset
+        label2: Legend label for second dataset
+        color1: Color for the first dataset
+        color2: Color for the second dataset
+    """
+    fig, ax = plt.subplots(figsize=(16, 8))
+    
+    categories = ['Author', 'Message', 'Date', 'Committer', 'CommitterDate', 'DifferentBranchName', 
+                  'FileModified', 'FileRemoved', 'ContentSplit', 'Other']
+    
+    # Extract values for both datasets
+    values1 = [(stats1[cat]/len(df))*100 for cat in categories]
+    values2 = [(stats2[cat]/len(df_1000_stars))*100 for cat in categories]
+    
+    # Set width and positions for bars
+    bar_width = 0.35
+    x = np.arange(len(categories))
+    
+    # Plot both datasets side by side
+    bars1 = ax.bar(x - bar_width/2, values1, bar_width, label=label1, color=color1, alpha=0.8)
+    bars2 = ax.bar(x + bar_width/2, values2, bar_width, label=label2, color=color2, alpha=0.8)
+    
+    # Add value labels on top of each bar
+    for bar in bars1:
+        height = bar.get_height()
+        ax.annotate(f'{height:.1f}%',
+                   xy=(bar.get_x() + bar.get_width() / 2, height),
+                   xytext=(0, 3),  # 3 points vertical offset
+                   textcoords="offset points",
+                   ha='center', va='bottom',
+                   color=color1, fontsize=8)
+    
+    for bar in bars2:
+        height = bar.get_height()
+        ax.annotate(f'{height:.1f}%',
+                   xy=(bar.get_x() + bar.get_width() / 2, height),
+                   xytext=(0, 3),  # 3 points vertical offset
+                   textcoords="offset points",
+                   ha='center', va='bottom',
+                   color=color2, fontsize=8)
+    
+    # Set common axis properties
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, rotation=45, ha='right', fontsize=10)
+    ax.set_ylabel('Percentage of Occurrences', fontsize=12)
+    
+    # Add grid
+    ax.grid(True, linestyle='--', alpha=0.3, axis='y')
+    
+    # Use log scale for y-axis to better compare values of different magnitudes
+    #ax.set_yscale('log')
+    
+    # Add title
+    fig.suptitle(title, fontsize=16, y=0.98)
+    
+    # Add legend
+    ax.legend(loc='upper right', fontsize=10)
+    
+    # Adjust layout to make room for the rotated x-labels
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    
+    plt.show()
     
 def display_single_META(stats):
     colors = ['blue', 'blue', 'blue', 'blue', 'blue']
