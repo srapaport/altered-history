@@ -28,3 +28,12 @@ logs/
 **/*.log
 
 **/__pycache__/*
+# python 
+__pycache__/
+
+# extension
+**/*.json
+**/*.log
+**/*.csv
+**/*.pkl
+**/*old*

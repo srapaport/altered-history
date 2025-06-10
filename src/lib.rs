@@ -1,12 +1,10 @@
 pub mod analysis;
 pub mod classes;
 pub mod env;
-pub mod visit_timestamps;
 use anyhow::{ensure, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use rayon::ThreadPoolBuilder;
-use rocksdb::{Options, DB};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::fs::File;
@@ -15,8 +13,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::thread;
+use swh_graph::mph::DynMphf;
+//use std::time::Instant;
 use swh_graph::graph::*;
-use swh_graph::java_compat::mph::gov::GOVMPH;
 use swh_graph::labels::{EdgeLabel, VisitStatus};
 use swh_graph::NodeType;
 
@@ -46,6 +45,7 @@ pub fn snapshots_sorting(snapshots: Box<[u8]>) -> VecDeque<String> {
 /// -> (snapshot with altered commit, altered commit, branch name, snapshot without altered commit)
 pub fn altered_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snapshots: &mut VecDeque<String>,
+    removed_branch: bool,
     graph: &G,
 ) -> Option<HashSet<(String, String, String, String)>>
 where
@@ -58,166 +58,220 @@ where
     if snapshots.len() < 2 {
         return None;
     }
+    // let mut swhid1 = "swh:1:snp:".to_string() + &(snapshots.pop_front().unwrap()); // --> to do like this with rocksdb
     let mut swhid1 = snapshots.pop_front().unwrap();
-    let mut set_branch_kept = HashSet::new();
-    let mut set_branch_rejected = HashSet::new();
-    let mut set_revs_analyzed = HashSet::new();
-    let mut kept: bool = false;
-    let mut swhid1_commits = find_all_commits(
-        &swhid1,
-        &mut set_branch_kept,
-        &mut set_branch_rejected,
-        &mut set_revs_analyzed,
-        &mut kept,
-        graph,
-    )
-    .unwrap();
+    debug!("swhid1: {swhid1}");
+
+    let mut swhid1_heads: HashMap<String, usize>;
+    match branches_head(&swhid1, graph) {
+        None => return None,
+        Some(b) => swhid1_heads = b,
+    }
+
+    let mut swhid1_commits: HashMap<String, HashSet<usize>> = HashMap::new();
 
     'find_altered_commits: loop {
-        let swhid2 = snapshots.pop_front().unwrap();
-        let swhid2_commits = find_all_commits(
-            &swhid2,
-            &mut set_branch_kept,
-            &mut set_branch_rejected,
-            &mut set_revs_analyzed,
-            &mut kept,
-            graph,
-        )
-        .unwrap();
-
-        let branch_altered_commits = compare_maps(&swhid1_commits, &swhid2_commits);
-        if branch_altered_commits.len() > 0 {
-            curr_altered_commits.extend(
-                branch_altered_commits
-                    .into_iter()
-                    .map(
-                        |(branch_name, commit)| -> (String, String, String, String) {
-                            (swhid1.clone(), branch_name, commit, swhid2.clone())
-                        },
-                    )
-                    .collect::<HashSet<(String, String, String, String)>>(),
-            );
+        let mut swhid2 = snapshots.pop_front().unwrap();
+        while swhid1 == swhid2 {
+            if snapshots.len() < 1 {
+                break 'find_altered_commits;
+            }
+            swhid2 = snapshots.pop_front().unwrap();
         }
-        swhid1 = swhid2;
-        swhid1_commits = swhid2_commits;
 
+        let swhid2_heads: HashMap<String, usize>;
+        match branches_head(&swhid2, graph) {
+            None => return None,
+            Some(b) => swhid2_heads = b,
+        }
+
+        let mut swhid2_commits: HashMap<String, HashSet<usize>> = HashMap::new();
+
+        for (branch, head1) in swhid1_heads.iter() {
+            match swhid2_heads.get(branch) {
+                // the branch exists in swhid2
+                Some(head2) => {
+                    // If the branch changed
+                    if *head1 != *head2 {
+                        swhid2_commits
+                            .insert(branch.clone(), find_all_commits_in_branch(*head2, graph));
+                        // If the head is in the commits of snapshot swhid2
+                        if swhid2_commits.get(branch).unwrap().contains(head1) {
+                            continue;
+                        }
+                        if swhid1_commits.get(branch).is_none() {
+                            swhid1_commits
+                                .insert(branch.clone(), find_all_commits_in_branch(*head1, graph));
+                        }
+                        let difference: HashSet<usize> = swhid1_commits
+                            .get(branch)
+                            .unwrap()
+                            .difference(&swhid2_commits.get(branch).unwrap())
+                            .cloned()
+                            .collect();
+                        // if there np missing commit <=> difference is empty, we jump to the next iteration
+                        if difference.is_empty() {
+                            continue;
+                        }
+                        curr_altered_commits.extend(
+                            difference
+                                .into_iter()
+                                .map(|altered_commit| -> (String, String, String, String) {
+                                    let swhid_altered_commit =
+                                        graph.properties().swhid(altered_commit).to_string();
+                                    (
+                                        swhid1.clone(),
+                                        branch.clone(),
+                                        swhid_altered_commit,
+                                        swhid2.clone(),
+                                    )
+                                })
+                                .collect::<HashSet<(String, String, String, String)>>(),
+                        );
+                    }
+                }
+                // the branch doesn't exist anymore
+                None => {
+                    // add all commits from the branch
+                    // to be categorized in RemovedBranch
+                    // if the option removed_branch is true
+                    if removed_branch {
+                        let all_commits;
+                        if swhid1_commits.get(branch).is_none() {
+                            swhid1_commits
+                                .insert(branch.clone(), find_all_commits_in_branch(*head1, graph));
+                        }
+                        all_commits = swhid1_commits.get(branch).unwrap();
+                        curr_altered_commits.extend(
+                            all_commits
+                                .into_iter()
+                                .map(|altered_commit| -> (String, String, String, String) {
+                                    let swhid_altered_commit =
+                                        graph.properties().swhid(*altered_commit).to_string();
+                                    (
+                                        swhid1.clone(),
+                                        branch.clone(),
+                                        swhid_altered_commit,
+                                        swhid2.clone(),
+                                    )
+                                })
+                                .collect::<HashSet<(String, String, String, String)>>(),
+                        );
+                    }
+                }
+            }
+        }
         if snapshots.len() < 1 {
             break 'find_altered_commits;
         }
+        swhid1 = swhid2;
+        swhid1_heads = swhid2_heads;
+        swhid1_commits = swhid2_commits;
     }
-    env::BRANCHES_KEPT.fetch_add(set_branch_kept.len(), Ordering::Relaxed);
-    env::BRANCHES_REJECTED.fetch_add(set_branch_rejected.len(), Ordering::Relaxed);
     debug!("Current missing commits: {:?}", curr_altered_commits);
-    if kept {
-        env::ORI_KEPT.fetch_add(1, Ordering::Relaxed);
-        env::TOTAL_REV_ANALYZED.fetch_add(set_revs_analyzed.into_iter().count(), Ordering::Relaxed);
-    } else {
-        env::ORI_REJECTED.fetch_add(1, Ordering::Relaxed);
-    }
     if curr_altered_commits.len() == 0 {
         return None;
     }
     Some(curr_altered_commits)
 }
 
-/// Takes a snapshot and returns a map
-/// The map takes the branch name as an entry and has a set of all the commits in the branch as a value
-/// The function also keeps track of the branch that are kept and rejected
-fn find_all_commits<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+fn branches_head<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snap_swhid: &String,
-    set_branch_kept: &mut HashSet<String>,
-    set_branch_rejected: &mut HashSet<String>,
-    set_revs_analyzed: &mut HashSet<usize>,
-    kept: &mut bool,
     graph: &G,
-) -> Option<HashMap<String, HashSet<String>>>
+) -> Option<HashMap<String, usize>>
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
-    let mut all_commits: HashMap<String, HashSet<String>> = HashMap::new();
-    //Check that the swhid given is a snapshot
+    //let start = Instant::now();
+    let props = graph.properties();
     if graph
         .properties()
-        .node_type(graph.properties().node_id(snap_swhid.as_str()).unwrap())
+        .node_type(props.node_id(snap_swhid.as_str()).unwrap())
         != NodeType::Snapshot
     {
         return None;
     }
-    //Snapshot ID
-    let node_id = graph.properties().node_id(snap_swhid.as_str()).unwrap();
-    //All the successors of the snapshots
+    let mut heads = HashMap::new();
+    //Snapshot id
+    let node_id = props.node_id(snap_swhid.as_str()).unwrap();
+    //All the successors of the snapshots (Release + Revision)
     let successors = graph.labeled_successors(node_id);
     for (succ, labels) in successors {
-        //succ is the ID a snapshot successor and labels are all the branches it is in
-        let succ_swhid = graph.properties().swhid(succ).to_string();
-        let succ_type = graph.properties().node_type(succ);
+        let succ_type = props.node_type(succ);
         //If the successor is not a revision or a release we don't wanna check its children nor add it to the list
         if !(succ_type == NodeType::Revision) && !(succ_type == NodeType::Release) {
-            debug!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ_swhid);
+            //warn!("A snapshot successor is neither a release nor a revision. Snapshot: {} | Successor: {}", snap_swhid, succ);
+            //Probably returning None but can't be sure so continue
             continue;
         }
+        let mut head = None;
+        if succ_type == NodeType::Revision {
+            head = Some(succ);
+        } else {
+            // If it is a Release then the head is a successor
+            let mut to_visit = VecDeque::new();
+            to_visit.push_back(succ);
+            let mut visited = HashSet::new();
+            'visit: while let Some(node) = to_visit.pop_front() {
+                if visited.contains(&node) {
+                    continue;
+                }
+                visited.insert(node);
+                let successors = graph.successors(node);
+                for succ in successors {
+                    match props.node_type(succ) {
+                        NodeType::Revision => {
+                            head = Some(succ);
+                            break 'visit;
+                        }
+                        NodeType::Release => {
+                            //info!("RELEASE");
+                            to_visit.push_back(succ);
+                        }
+                        _ => (),
+                    }
+                }
+            }
+            if head == None {
+                return None;
+            }
+        }
 
-        //We gather all the branches associated to this successor
-        let mut branch_list: Vec<String> = Vec::new();
         for label in labels {
             let branch_name: String;
-            //let filename = graph.properties().label_name(label);
             if let EdgeLabel::Branch(branch) = label {
                 branch_name =
-                    String::from_utf8_lossy(&(graph.properties().label_name(branch.filename_id())))
-                        .to_string();
-                // if !env::RE_BRANCH.is_match(&branch_name) {
-                //     set_branch_rejected.insert(branch_name);
-                //     continue;
-                // }
-                *kept = true;
-                set_branch_kept.insert(branch_name.clone());
+                    String::from_utf8_lossy(&(props.label_name(branch.filename_id()))).to_string();
+                heads.insert(branch_name, head.unwrap());
             } else {
                 continue;
             }
-            branch_list.push(branch_name);
         }
-
-        if branch_list.len() == 0 {
-            continue;
-        }
-        find_all_commits_aux(
-            &mut all_commits,
-            &branch_list,
-            succ,
-            set_revs_analyzed,
-            graph,
-        );
     }
-    Some(all_commits)
+    if heads.len() == 0 {
+        return None;
+    }
+    //info!("branches_head |  time elapsed: {:.2?}", start.elapsed());
+    Some(heads)
 }
 
-/// This is an auxiliary function to find_all_commits
-/// this function retrieves all commits that are ancestors of the given one
-/// it will add them to the map associated to all the branches where the given commit is root
-fn find_all_commits_aux<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
-    all_commits: &mut HashMap<String, HashSet<String>>,
-    branch_list: &Vec<String>,
-    node: usize,
-    set_revs_analyzed: &mut HashSet<usize>,
+fn find_all_commits_in_branch<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+    head: usize,
     graph: &G,
-) where
+) -> HashSet<usize>
+where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
-    let succ_swhid = graph.properties().swhid(node).to_string();
-    for branch in branch_list {
-        all_commits
-            .entry(branch.clone())
-            .or_insert_with(HashSet::new)
-            .insert(succ_swhid.clone());
-    }
+    //let start = Instant::now();
+    let mut all_commits = HashSet::new();
+
     let mut nodes_to_visit = Vec::new();
-    nodes_to_visit.push(node);
+    nodes_to_visit.push(head);
+    all_commits.insert(head);
     let mut visited: HashSet<usize> = HashSet::new();
     while let Some(node) = nodes_to_visit.pop() {
-        //debug!("size nodes_to_visit: {}", nodes_to_visit.len());
         if visited.contains(&node) {
             continue;
         }
@@ -225,277 +279,16 @@ fn find_all_commits_aux<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
         let successors = graph.successors(node);
         for succ in successors {
             let succ_type = graph.properties().node_type(succ);
-            if succ_type != NodeType::Revision && succ_type != NodeType::Release {
+            // We are not visiting the successors of Directories
+            if succ_type != NodeType::Revision {
                 continue;
             }
-            let succ_swhid = graph.properties().swhid(succ).to_string();
-            for branch in branch_list {
-                all_commits
-                    .entry(branch.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(succ_swhid.clone());
-            }
-            set_revs_analyzed.insert(succ);
+            all_commits.insert(succ);
             nodes_to_visit.push(succ);
         }
     }
-}
-
-/// retrieve all commits included in the first snapshot but not in the second
-fn compare_maps(
-    is_included: &HashMap<String, HashSet<String>>,
-    include: &HashMap<String, HashSet<String>>,
-) -> HashSet<(String, String)> {
-    let mut not_included: HashSet<(String, String)> = HashSet::new();
-    for (branch_name, commits_included) in is_included {
-        match include.get(branch_name) {
-            Some(include_commits) => {
-                for commit_included in commits_included {
-                    if include_commits.contains(commit_included) {
-                        continue;
-                    }
-                    not_included.insert((branch_name.clone(), commit_included.clone()));
-                }
-            }
-            None => {
-                debug!("Branch: {}, couldn't be found", branch_name);
-                //todo!("Add all the commits in the 'Removed Branch' class");
-                continue;
-            }
-        }
-    }
-    debug!("Not included: {:?}", not_included);
-    not_included
-}
-
-/// Find all altered commits from the given graph and orc files
-/// Start at the beginning and create a checkpoint
-/// Write the results at opts.results
-pub fn main_all_database_mpsc(opts: &env::Options) {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let prefix_res: &str = opts.results.as_str();
-    let number_of_origins: usize = opts.expected_origins;
-    let chunk: usize = opts.chunk;
-    let db_path = PathBuf::from(opts.output_dir.as_str());
-
-    let (tx, rx) = channel::<(String, Option<HashSet<(String, String, String, String)>>)>();
-
-    let jh = thread::spawn(move || {
-        let workers = num_cpus::get() / 3;
-
-        let graph = SwhUnidirectionalGraph::new(graph_path)
-            .expect("Could not load graph")
-            .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
-            .expect("Could not load maps")
-            .load_properties(|properties| properties.load_label_names())
-            .expect("Could no load label names")
-            .load_labels()
-            .expect("Could not load labels");
-
-        let mut options = Options::default();
-        let db = DB::open(&options, db_path).unwrap();
-        let count_origins = AtomicUsize::new(0);
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
-            )
-            .unwrap(),
-        );
-
-        pool.install(|| {
-            rayon::scope(|thread| {
-                for result in db.iterator(rocksdb::IteratorMode::Start) {
-                    match result {
-                        Ok((key, value)) => {
-                            thread.spawn({
-                                let tx = tx.clone();
-                                |_| {
-                                    let tx = tx;
-                                    let key = key;
-                                    let value = value;
-                                    count_origins.fetch_add(1, Ordering::Relaxed);
-                                    let key_str = String::from_utf8(key.to_vec()).unwrap();
-                                    let thread_id = unsafe { gettid() };
-                                    info!(
-                                        "Checking Origin: {} | with pid: {:?}",
-                                        key_str, thread_id
-                                    );
-
-                                    let mut sorted_snapshots = snapshots_sorting(value);
-                                    debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-                                    ///////////// altered_commits
-                                    if let Some(curr_altered_commits) =
-                                        altered_commits(&mut sorted_snapshots, &graph)
-                                    {
-                                        info!("Missing commits in {}", key_str);
-                                        tx.send((key_str, Some(curr_altered_commits)))
-                                            .expect("Failed sending the msg");
-                                    } else {
-                                        tx.send((key_str, None)).expect("Failed sending the msg");
-                                    }
-                                    let curr_nb_origins =
-                                        count_origins.load(Ordering::Relaxed) as u64;
-                                    bar.set_position(curr_nb_origins);
-                                }
-                            });
-                        }
-                        Err(_) => continue,
-                    }
-                }
-            });
-        });
-        bar.finish_and_clear();
-    });
-
-    let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
-    let mut cp: HashSet<String> = HashSet::new();
-    File::create(format!("{}/checkpoints", prefix_res)).expect("couldn't create checkpoint file");
-
-    // Receive results in parallel and write them at the frequency of opts.chunk
-    for _ in 0..number_of_origins {
-        let (ori, value) = rx.recv().expect("Couldn't receive data");
-        if let Some(mc) = value {
-            if res.len() > chunk {
-                flush_map(prefix_res, &mut res);
-                create_cp(prefix_res, &mut cp);
-            }
-            res.insert(ori.clone(), mc);
-        }
-        cp.insert(ori);
-    }
-    if res.len() > 0 {
-        flush_map(prefix_res, &mut res);
-    }
-    if cp.len() > 0 {
-        create_cp(prefix_res, &mut cp);
-    }
-    jh.join().unwrap();
-}
-
-/// Find all altered commits from the given graph and orc files
-/// Start where the last checkpoint stoped
-/// Write the results at opts.results
-pub fn main_all_database_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<String>) {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let prefix_res: &str = opts.results.as_str();
-    let number_of_origins: usize = opts.expected_origins;
-    let chunk: usize = opts.chunk;
-    let db_path = PathBuf::from(opts.output_dir.as_str());
-
-    let (tx, rx) = channel::<Option<(String, Option<HashSet<(String, String, String, String)>>)>>();
-
-    let jh = thread::spawn(move || {
-        let workers = num_cpus::get() / 3;
-        let graph = SwhUnidirectionalGraph::new(graph_path)
-            .expect("Could not load graph")
-            .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
-            .expect("Could not load maps")
-            .load_properties(|properties| properties.load_label_names())
-            .expect("Could no load label names")
-            .load_labels()
-            .expect("Could not load labels");
-
-        let mut options = Options::default();
-        let db = DB::open(&options, db_path).unwrap();
-        let count_origins = AtomicUsize::new(0);
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
-            )
-            .unwrap(),
-        );
-
-        pool.install(|| {
-            rayon::scope(|thread| {
-                for result in db.iterator(rocksdb::IteratorMode::Start) {
-                    match result {
-                        Ok((key, value)) => {
-                            thread.spawn({
-                                let tx = tx.clone();
-                                |_| {
-                                    let tx = tx;
-                                    let key = key;
-                                    let value = value;
-                                    count_origins.fetch_add(1, Ordering::Relaxed);
-                                    let key_str = String::from_utf8(key.to_vec()).unwrap();
-                                    ///////// Skipping if necessary according to the checkpoints
-                                    if !checkpoint.contains(&key_str) {
-                                        let thread_id = unsafe { gettid() };
-                                        info!(
-                                            "Checking Origin: {} | with pid: {:?}",
-                                            key_str, thread_id
-                                        );
-                                        let mut sorted_snapshots = snapshots_sorting(value);
-                                        debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-                                        ///////////// altered_commits
-                                        if let Some(curr_altered_commits) =
-                                            altered_commits(&mut sorted_snapshots, &graph)
-                                        {
-                                            info!(
-                                                "Missing commits in {} | with pid: {}",
-                                                key_str,
-                                                std::process::id()
-                                            );
-                                            tx.send(Some((key_str, Some(curr_altered_commits))))
-                                                .expect("Failed sending the msg");
-                                        } else {
-                                            tx.send(Some((key_str, None)))
-                                                .expect("Failed sending the msg");
-                                        }
-                                        let curr_nb_origins =
-                                            count_origins.load(Ordering::Relaxed) as u64;
-                                        bar.set_position(curr_nb_origins);
-                                    } else {
-                                        info!("Not calculating Origin: {}", key_str);
-                                        tx.send(None).expect("Failed sending the msg");
-                                    }
-                                }
-                            });
-                        }
-                        Err(_) => continue,
-                    }
-                }
-            });
-        });
-        bar.finish_and_clear();
-    });
-    // Receive results in parallel and write them at the frequency of opts.chunk
-    let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
-    let mut cp: HashSet<String> = HashSet::new();
-    for _ in 0..number_of_origins {
-        if let Some(package) = rx.recv().expect("Couldn't receive data") {
-            let (ori, value) = package;
-            if let Some(mc) = value {
-                if res.len() > chunk {
-                    flush_map(prefix_res, &mut res);
-                    create_cp(prefix_res, &mut cp);
-                }
-                res.insert(ori.clone(), mc);
-            }
-            cp.insert(ori);
-        }
-    }
-    if res.len() > 0 {
-        flush_map(prefix_res, &mut res);
-    }
-    if cp.len() > 0 {
-        create_cp(prefix_res, &mut cp);
-    }
-    jh.join().unwrap();
+    //info!("find_all_commits_in_branch | time elapsed: {:.2?}", start.elapsed());
+    all_commits
 }
 
 /// retrieves all snapshots of a given origin
@@ -532,132 +325,39 @@ where
 }
 
 /// Find all altered commits from the given graph and orc files
-/// Start at the beginning and create a checkpoint
-/// Write the results at opts.results
-pub fn main_all_mpsc(opts: &env::Options) {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let prefix_res: &str = opts.results.as_str();
-    let number_of_origins: usize = opts.expected_origins;
-    let chunk: usize = opts.chunk;
-
-    let (tx, rx) = channel::<(String, Option<HashSet<(String, String, String, String)>>)>();
-
-    let jh = thread::spawn(move || {
-        let workers = num_cpus::get() / 3;
-
-        let graph = SwhUnidirectionalGraph::new(graph_path)
-            .expect("Could not load graph")
-            .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
-            .expect("Could not load maps")
-            .load_properties(|properties| properties.load_label_names())
-            .expect("Could no load label names")
-            .load_labels()
-            .expect("Could not load labels");
-
-        let count_origins = AtomicUsize::new(0);
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let bar = ProgressBar::new(number_of_origins as u64);
-        bar.set_style(
-            ProgressStyle::with_template(
-                "{wide_bar} {pos} {percent_precise}% {elapsed_precise} {duration_precise} {eta}",
-            )
-            .unwrap(),
-        );
-
-        pool.install(|| {
-            rayon::scope(|thread| {
-                for ori in 0..graph.num_nodes() {
-                    if graph.properties().node_type(ori) != NodeType::Origin {
-                        continue;
-                    }
-                    thread.spawn({
-                        let tx = tx.clone();
-                        let count_origins = &count_origins;
-                        let bar = &bar;
-                        let graph = &graph;
-                        move |_| {
-                            let tx = tx;
-                            count_origins.fetch_add(1, Ordering::Relaxed);
-                            let ori_str = graph.properties().swhid(ori).to_string();
-                            let thread_id = unsafe { gettid() };
-                            info!("Checking Origin: {} | with pid: {:?}", ori_str, thread_id);
-                            let sorted_snapshots: Vec<String> =
-                                retrieve_sorted_snapshots(ori, &graph)
-                                    .unwrap()
-                                    .into_iter()
-                                    .map(|(snap, _)| graph.properties().swhid(snap).to_string())
-                                    .collect();
-                            debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-                            ///////////// altered_commits
-                            if let Some(curr_altered_commits) =
-                                altered_commits(&mut VecDeque::from(sorted_snapshots), &graph)
-                            {
-                                info!("Missing commits in {}", ori_str);
-                                tx.send((ori_str, Some(curr_altered_commits)))
-                                    .expect("Failed sending the msg");
-                            } else {
-                                tx.send((ori_str, None)).expect("Failed sending the msg");
-                            }
-                            let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
-                            bar.set_position(curr_nb_origins);
-                        }
-                    });
-                }
-            });
-        });
-        bar.finish_and_clear();
-    });
-
-    let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
-    let mut cp: HashSet<String> = HashSet::new();
-    File::create(format!("{}/checkpoints", prefix_res)).expect("couldn't create checkpoint file");
-
-    // Receive results in parallel and write them at the frequency of opts.chunk
-    for _ in 0..number_of_origins {
-        let (ori, value) = rx.recv().expect("Couldn't receive data");
-        if let Some(mc) = value {
-            if res.len() > chunk {
-                flush_map(prefix_res, &mut res);
-                create_cp(prefix_res, &mut cp);
-            }
-            res.insert(ori.clone(), mc);
-        }
-        cp.insert(ori);
-    }
-    if res.len() > 0 {
-        flush_map(prefix_res, &mut res);
-    }
-    if cp.len() > 0 {
-        create_cp(prefix_res, &mut cp);
-    }
-    jh.join().unwrap();
-}
-
-/// Find all altered commits from the given graph and orc files
 /// Start where the last checkpoint stoped
 /// Write the results at opts.results
-pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<String>) {
+pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet<String>>) {
     let graph_path = PathBuf::from(opts.graph.as_str());
     let prefix_res: &str = opts.results.as_str();
     let number_of_origins: usize = opts.expected_origins;
     let chunk: usize = opts.chunk;
-
-    let (tx, rx) = channel::<Option<(String, Option<HashSet<(String, String, String, String)>>)>>();
-
+    let checkpoint: HashSet<String>;
+    let removed_branch = opts.removed_branch;
+    match checkpoint_opt {
+        Some(cp) => checkpoint = cp,
+        None => checkpoint = HashSet::new(),
+    }
+    let (tx, rx) = channel::<
+        Option<(
+            String,
+            String,
+            Option<HashSet<(String, String, String, String)>>,
+        )>,
+    >();
     let jh = thread::spawn(move || {
+        let amount_of_ori_kept = AtomicUsize::new(0);
+        let amount_of_ori_less_2_visit = AtomicUsize::new(0);
         let workers = num_cpus::get() / 3;
         let graph = SwhUnidirectionalGraph::new(graph_path)
             .expect("Could not load graph")
             .init_properties()
-            .load_properties(|properties| properties.load_maps::<GOVMPH>())
+            .load_properties(|properties| properties.load_maps::<DynMphf>())
             .expect("Could not load maps")
             .load_properties(|properties| properties.load_label_names())
             .expect("Could no load label names")
+            .load_properties(|properties| properties.load_strings())
+            .expect("Could no load strings")
             .load_labels()
             .expect("Could not load labels");
 
@@ -673,13 +373,26 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<String>) {
             )
             .unwrap(),
         );
-
         pool.install(|| {
             rayon::scope(|thread| {
                 for ori in 0..graph.num_nodes() {
                     if graph.properties().node_type(ori) != NodeType::Origin {
                         continue;
                     }
+                    let mut amount_visit = 0;
+                    graph
+                        .labeled_successors(ori)
+                        .into_iter()
+                        .for_each(|(_, labels)| {
+                            amount_visit += labels.into_iter().count();
+                        });
+                    if amount_visit <= 1 {
+                        amount_of_ori_less_2_visit.fetch_add(1, Ordering::Relaxed);
+                        tx.send(None)
+                            .expect("Failed sending the msg, less than 2 visits");
+                        continue;
+                    }
+                    amount_of_ori_kept.fetch_add(1, Ordering::Relaxed);
                     thread.spawn({
                         let tx = tx.clone();
                         let count_origins = &count_origins;
@@ -689,61 +402,94 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<String>) {
                         move |_| {
                             let tx = tx;
                             count_origins.fetch_add(1, Ordering::Relaxed);
-                            let ori_str = graph.properties().swhid(ori).to_string();
+                            let ori_swhid = graph.properties().swhid(ori).to_string();
+                            let thread_id = unsafe { gettid() };
                             ///////// Skipping if necessary according to the checkpoints
-                            if !(*checkpoint).contains(&ori_str) {
-                                let thread_id = unsafe { gettid() };
-                                info!("Checking Origin: {} | with pid: {:?}", ori_str, thread_id);
-                                let sorted_snapshots: Vec<String> =
-                                    retrieve_sorted_snapshots(ori, &graph)
-                                        .unwrap()
-                                        .into_iter()
-                                        .map(|(snap, _)| graph.properties().swhid(snap).to_string())
-                                        .collect();
-                                debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-                                ///////////// altered_commits
-                                if let Some(curr_altered_commits) =
-                                    altered_commits(&mut VecDeque::from(sorted_snapshots), &graph)
-                                {
+                            if !(*checkpoint).contains(&ori_swhid) {
+                                if let Some(url) = graph.properties().message(ori) {
+                                    let ori_url = String::from_utf8_lossy(&url).to_string();
                                     info!(
-                                        "Missing commits in {} | with pid: {}",
-                                        ori_str,
-                                        std::process::id()
+                                        "Checking Origin: {} | with pid: {:?}",
+                                        ori_swhid, thread_id
                                     );
-                                    tx.send(Some((ori_str, Some(curr_altered_commits))))
+                                    let sorted_snapshots: Vec<String> =
+                                        retrieve_sorted_snapshots(ori, &graph)
+                                            .unwrap()
+                                            .into_iter()
+                                            .map(|(snap, _)| {
+                                                graph.properties().swhid(snap).to_string()
+                                            })
+                                            .filter(|snap| snap != env::EMPTY_SNAPSHOT_SWHID)
+                                            .collect();
+                                    debug!("    sorted snapshots: {:?}", sorted_snapshots);
+
+                                    ///////////// altered_commits
+                                    if let Some(curr_altered_commits) = altered_commits(
+                                        &mut VecDeque::from(sorted_snapshots),
+                                        removed_branch,
+                                        &graph,
+                                    ) {
+                                        info!(
+                                            "Missing commits in {} | with pid: {}",
+                                            ori_swhid, thread_id
+                                        );
+                                        tx.send(Some((
+                                            ori_swhid,
+                                            ori_url,
+                                            Some(curr_altered_commits),
+                                        )))
                                         .expect("Failed sending the msg");
+                                    } else {
+                                        info!(
+                                            "No missing commits in {} | with pid: {}",
+                                            ori_swhid, thread_id
+                                        );
+                                        tx.send(Some((ori_swhid, ori_url, None)))
+                                            .expect("Failed sending the msg");
+                                    }
                                 } else {
-                                    tx.send(Some((ori_str, None)))
+                                    env::ORI_REJECTED.fetch_add(1, Ordering::Relaxed);
+                                    tx.send(Some((ori_swhid, String::new(), None)))
                                         .expect("Failed sending the msg");
                                 }
-                                let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
-                                bar.set_position(curr_nb_origins);
                             } else {
-                                info!("Not calculating Origin: {}", ori_str);
+                                info!(
+                                    "Not calculating Origin: {} | with pid {}",
+                                    ori_swhid, thread_id
+                                );
                                 tx.send(None).expect("Failed sending the msg");
                             }
+                            let curr_nb_origins = count_origins.load(Ordering::Relaxed) as u64;
+                            bar.set_position(curr_nb_origins);
                         }
                     });
                 }
             });
         });
         bar.finish_and_clear();
+        println!(
+            "Amount of origins kept: {}",
+            amount_of_ori_kept.load(Ordering::Relaxed)
+        );
+        println!(
+            "Amount of origins ignored (less than 2 visits): {}",
+            amount_of_ori_less_2_visit.load(Ordering::Relaxed)
+        );
     });
     // Receive results in parallel and write them at the frequency of opts.chunk
     let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
     let mut cp: HashSet<String> = HashSet::new();
     for _ in 0..number_of_origins {
         if let Some(package) = rx.recv().expect("Couldn't receive data") {
-            let (ori, value) = package;
+            let (ori_swhid, ori_url, value) = package;
             if let Some(mc) = value {
                 if res.len() > chunk {
                     flush_map(prefix_res, &mut res);
                     create_cp(prefix_res, &mut cp);
                 }
-                res.insert(ori.clone(), mc);
+                res.insert(ori_url, mc);
             }
-            cp.insert(ori);
+            cp.insert(ori_swhid);
         }
     }
     if res.len() > 0 {
@@ -755,73 +501,64 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint: HashSet<String>) {
     jh.join().unwrap();
 }
 
-/// Find all altered commits from a given origin
-/// returns a set of (snapshot with altered commit, altered commit, branch name, snapshot without altered commit)
-pub fn main_targeted_origin(
-    opts: &env::Options,
-    ori: &str,
-) -> Option<HashSet<(String, String, String, String)>> {
-    let graph_path = PathBuf::from(opts.graph.as_str());
-    let db_path = PathBuf::from(opts.output_dir.as_str());
-
-    let graph = SwhUnidirectionalGraph::new(graph_path)
-        .expect("Could not load graph")
-        .init_properties()
-        .load_properties(|properties| properties.load_maps::<GOVMPH>())
-        .expect("Could not load maps")
-        .load_properties(|properties| properties.load_label_names())
-        .expect("Could no load label names")
-        .load_labels()
-        .expect("Could not load labels");
-
-    let options = Options::default();
-    let db = DB::open(&options, db_path).unwrap();
-
-    let value: Box<[u8]> = db.get(ori).unwrap().unwrap().into();
-
-    info!("Origin: {}", ori);
-
-    let mut sorted_snapshots = snapshots_sorting(value);
-    debug!("    sorted snapshots: {:?}", sorted_snapshots);
-
-    ///////////// altered_commits
-    let Some(curr_altered_commits) = altered_commits(&mut sorted_snapshots, &graph) else {
-        info!("No missing commit in {}", ori);
-        return None;
-    };
-    Some(curr_altered_commits)
-}
-
 /// writes the current results with chunk amount of results in prefix
 fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, String, String)>>) {
     let swhid = format!("{}", map.iter().next().unwrap().1.iter().next().unwrap().0);
     let filename = format!("{}/{}.csv", prefix, swhid);
     let filename_tmp = format!("{}/{}.tmp", prefix, swhid);
-    let Ok(mut file_w) = File::create_new(format!("{}", filename_tmp)) else {
-        warn!("File {} already exists!", filename_tmp);
+    if let Ok(_) = fs::metadata(&filename_tmp) {
+        warn!(
+            "lib.rs > flush_map | File {} already exists!",
+            &filename_tmp
+        );
         return;
-    };
-    file_w
-        .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
-        .expect(format!("couldn't write headings in file: {}", filename_tmp).as_str());
+    }
+    // let Ok(mut file_w) = File::create_new(format!("{}", filename_tmp)) else {
+    //     warn!("File {} already exists!", filename_tmp);
+    //     return;
+    // };
+    let mut csv_wrt = csv::WriterBuilder::new()
+        .delimiter(b';')
+        .from_path(filename_tmp.as_str())
+        .unwrap();
+    // file_w
+    //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
+    //     .expect(format!("couldn't write headings in file: {}", filename_tmp).as_str());
     map.iter().for_each(|v| {
         v.1.iter().for_each(|set| {
-            file_w
-                .write(format!("{};{};{};{};{}\n", v.0, set.0, set.1, set.2, set.3).as_bytes())
-                .expect(format!("couldn't write datas in file: {}", filename_tmp).as_str());
+            let record = env::AlteredCommit {
+                origin: v.0.to_string(),
+                snapshot_src: set.0.to_string(),
+                branch_name: set.1.to_string(),
+                missing_commit: set.2.to_string(),
+                snapshot_dst: set.3.to_string(),
+                first_difference: None,
+                main_category: None,
+                sub_categories: None,
+            };
+            csv_wrt.serialize(record).unwrap();
+            // file_w
+            //     .write(format!("{};{};{};{};{}\n", replace_semicolon(v.0), replace_semicolon(&set.0), replace_semicolon(&set.1), replace_semicolon(&set.2), replace_semicolon(&set.3)).as_bytes())
+            //     .expect(format!("couldn't write datas in file: {}", filename_tmp).as_str());
         });
     });
+    csv_wrt.flush().unwrap();
     map.clear();
-    drop(file_w); // didn't end with this instruction one time
+    //drop(file_w); // didn't end with this instruction one time
     std::fs::rename(&filename_tmp, &filename)
         .expect(format!("Couldn't rename {} into {}", filename_tmp, filename).as_str());
 }
 
 /// creates a new checkpoint in the file checkpoints
 fn create_cp(prefix: &str, cp: &mut HashSet<String>) {
+    let filename = format!("{}/checkpoints", prefix);
+    if let Err(_) = fs::metadata(&filename) {
+        File::create_new(&filename)
+            .expect(format!("lib.rs > create_cp | File {} already exists!", &filename).as_str());
+    }
     let mut cp_file = fs::OpenOptions::new()
         .append(true)
-        .open(format!("{}/checkpoints", prefix).as_str())
+        .open(filename)
         .expect(format!("cannot open checkpoints file").as_str());
     cp.iter().for_each(|ori| {
         cp_file
@@ -853,4 +590,64 @@ pub fn load_checkpoint(opts: &env::Options) -> Option<HashSet<String>> {
     }
 
     return Some(res);
+}
+
+pub fn main_single_origin(
+    opts: &env::Options,
+    origin: &str,
+) -> Option<HashSet<(String, String, String, String)>> {
+    let graph_path = PathBuf::from(opts.graph.as_str());
+    let removed_branch = opts.removed_branch;
+
+    let graph = SwhUnidirectionalGraph::new(graph_path)
+        .expect("Could not load graph")
+        .init_properties()
+        .load_properties(|properties| properties.load_maps::<DynMphf>())
+        .expect("Could not load maps")
+        .load_properties(|properties| properties.load_label_names())
+        .expect("Could no load label names")
+        .load_properties(|properties| properties.load_strings())
+        .expect("Could no load strings")
+        .load_labels()
+        .expect("Could not load labels");
+
+    let ori_swhid = format!(
+        "swh:1:ori:{}",
+        sha1_smol::Sha1::from(origin).digest().to_string()
+    );
+    let ori_node = graph.properties().node_id(ori_swhid.as_str()).expect(
+        format!(
+            "couldn't find node id for swhid {} for origin {}",
+            ori_swhid, origin
+        )
+        .as_str(),
+    );
+
+    let sorted_snapshots: Vec<String> = retrieve_sorted_snapshots(ori_node, &graph)
+        .unwrap()
+        .into_iter()
+        .map(|(snap, _)| graph.properties().swhid(snap).to_string())
+        .filter(|snap| snap != env::EMPTY_SNAPSHOT_SWHID)
+        .collect();
+    debug!("    sorted snapshots: {:?}", sorted_snapshots);
+
+    ///////////// altered_commits
+    if let Some(curr_altered_commits) = altered_commits(
+        &mut VecDeque::from(sorted_snapshots),
+        removed_branch,
+        &graph,
+    ) {
+        info!("Missing commits in {}", ori_swhid);
+        curr_altered_commits.iter().for_each(|ac| {
+            println!("Snapshot with altered commit: {}", ac.0);
+            println!("Branch name: {}", ac.1);
+            println!("Altered commit: {}", ac.2);
+            println!("Snapshot without altered commit: {}", ac.3);
+            println!("---");
+        });
+        return Some(curr_altered_commits);
+    } else {
+        info!("No missing commits in {}", ori_swhid);
+    }
+    None
 }

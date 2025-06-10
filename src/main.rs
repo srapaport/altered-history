@@ -1,20 +1,30 @@
 use altered_history::classes;
 use altered_history::env;
-use clap::Parser;
-use flexi_logger::{Cleanup, Criterion, Duplicate, Logger, Naming};
+use flexi_logger::{Cleanup, Criterion, Logger, Naming};
+// use flexi_logger::Duplicate;
 use log::info;
 use log::LevelFilter;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+const GRAPH_PATH: &str = "";// /path/to/compressed/graph --> keep the name of the graph (often graph) without any extension
+const RESULTS_PATH: &str = "";// /path/to/results/directory
+
 fn main() {
-    let opts = altered_history::env::Options::parse();
+    //let opts = altered_history::env::Options::parse();
+    let opts = altered_history::env::Options {
+        graph: String::from(GRAPH_PATH),
+        results: String::from(RESULTS_PATH),
+        expected_origins: 310_334_314, // for 2024-08-23 extraction
+        chunk: 50_000, // arbitrary
+        removed_branch: false, // not use yet --> detect when a branch was deleted
+    };
 
     Logger::with(LevelFilter::Info)
         .log_to_file(
             flexi_logger::FileSpec::default()
-                .directory("/infres/ir800/rapaport/results/FULL_new/logs")
-                .basename("FULL-all")
+                .directory(format!("{}/logs", opts.results))
+                .basename("FULL_2024")
                 .suffix("log"),
         )
         .rotate(
@@ -22,33 +32,25 @@ fn main() {
             Naming::Numbers,             // Use numbers for rotated files
             Cleanup::KeepLogFiles(5),    // Keep at most 5 log files
         )
-        .duplicate_to_stderr(Duplicate::Warn) // Duplicate logs to stderr
+        //.duplicate_to_stderr(Duplicate::Warn) // Duplicate logs to stderr
         .start()
         .unwrap();
 
-    //Step 1
     println!("START");
+    // Retrieve History Alterations
     let start = Instant::now();
-    altered_history::visit_timestamps::retrieve_visit_timestamps(&opts);
-    if let Some(cp) = altered_history::load_checkpoint(&opts) {
-        altered_history::main_all_database_mpsc_with_cp(&opts, cp);
-    } else {
-        altered_history::main_all_database_mpsc(&opts);
-    }
-    println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    println!(
-        "branch kept: {} | branch rejected: {}",
-        env::BRANCHES_KEPT.load(Ordering::Relaxed),
-        env::BRANCHES_REJECTED.load(Ordering::Relaxed)
-    );
-    info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
-    info!(
-        "branch kept: {} | branch rejected: {}",
-        env::BRANCHES_KEPT.load(Ordering::Relaxed),
-        env::BRANCHES_REJECTED.load(Ordering::Relaxed)
-    );
 
-    //Focus
+    let cp = altered_history::load_checkpoint(&opts);
+    altered_history::main_all_mpsc_with_cp(&opts, cp);
+
+    println!(
+        "Origins rejected: {}",
+        env::ORI_REJECTED.load(Ordering::Relaxed)
+    );
+    println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
+    info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
+
+    //Identify Root Cause Commits
     let start = Instant::now();
     if altered_history::analysis::focus_missing_commits_all_files_with_save(&opts) {
         info!("Finished!");
@@ -56,9 +58,9 @@ fn main() {
     println!("Focus complete | time elapsed: {:.2?}", start.elapsed());
     info!("Focus complete | time elapsed: {:.2?}", start.elapsed());
 
-    //Classes
+    //Categorize Root Cause Commits
     let start = Instant::now();
-    classes::classification_all(&opts);
+    classes::categorization_all(&opts);
     println!(
         "Classification complete | time elapsed: {:.2?}",
         start.elapsed()
@@ -66,5 +68,13 @@ fn main() {
     info!(
         "Classification complete | time elapsed: {:.2?}",
         start.elapsed()
+    );
+    info!(
+        "Rev without a dir: {}",
+        env::REV_WITHOUT_DIR.load(Ordering::Relaxed)
+    );
+    println!(
+        "Rev without a dir: {}",
+        env::REV_WITHOUT_DIR.load(Ordering::Relaxed)
     );
 }
