@@ -7,15 +7,15 @@ use log::LevelFilter;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-const GRAPH_PATH: &str = "";// /path/to/compressed/graph --> keep the name of the graph (often graph) without any extension
-const RESULTS_PATH: &str = "";// /path/to/results/directory
+const GRAPH_PATH: &str = "/poolswh/softwareheritage/graph/2025-05-18/compressed/graph";// /path/to/compressed/graph --> keep the name of the graph (often graph) without any extension
+const RESULTS_PATH: &str = "/home/infres/rapaport/results/FULL_2025_05_18";// /path/to/results/directory
 
 fn main() {
     //let opts = altered_history::env::Options::parse();
     let opts = altered_history::env::Options {
         graph: String::from(GRAPH_PATH),
         results: String::from(RESULTS_PATH),
-        expected_origins: 310_334_314, // for 2024-08-23 extraction
+        expected_origins: 373_130_808, // for 2025-05-18 extraction
         chunk: 50_000, // arbitrary
         removed_branch: false, // not use yet --> detect when a branch was deleted
     };
@@ -24,7 +24,7 @@ fn main() {
         .log_to_file(
             flexi_logger::FileSpec::default()
                 .directory(format!("{}/logs", opts.results))
-                .basename("FULL_2024")
+                .basename("FULL_2025_05")
                 .suffix("log"),
         )
         .rotate(
