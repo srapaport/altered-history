@@ -1,4 +1,5 @@
 use crate::analysis;
+use crate::dir_changes;
 use crate::env;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::{info, warn};
@@ -16,7 +17,7 @@ use swh_graph::mph::DynMphf;
 use swh_graph::NodeType;
 
 /// returns the (node id, swhid) of the root directory of the given commit
-fn get_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+pub fn get_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     rev_swhid: &str,
     graph: &G,
 ) -> Option<usize>
@@ -72,7 +73,7 @@ where
 fn get_list_of_content<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     dir: usize,
     graph: &G,
-) -> HashMap<String, usize>
+) -> (HashMap<usize, HashMap<String, usize>>, HashMap<String, usize>, HashMap<usize, String>)
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
@@ -80,12 +81,17 @@ where
     <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
     <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
 {
-    // map returned by the function <path of content, node_id>
-    let mut res = HashMap::new();
+    // map returned by the function <node dir, <file name, node cnt>>
+    let mut res: HashMap<usize, HashMap<String, usize>> = HashMap::new();
+    // map of directory name with their hash/node
+    let mut dirs: HashMap<String, usize> = HashMap::new();
+    let mut dirs_reverse: HashMap<usize, String> = HashMap::new();
 
     // map with <node id, path> to build the final path of each content node
     let mut path_node: HashMap<usize, String> = HashMap::new();
     path_node.insert(dir, String::from("."));
+    dirs.insert(String::from("."), dir);
+    dirs_reverse.insert(dir, String::from("."));
 
     let mut to_visit = VecDeque::new();
     to_visit.push_back(dir);
@@ -116,10 +122,13 @@ where
                 );
                 match graph.properties().node_type(succ) {
                     NodeType::Content => {
-                        res.insert(path, succ);
+                        let dir = dirs.get(path_node.get(&node).expect("couldn't find path in path_node")).expect("couldn't find node in dirs");
+                        res.entry(*dir).or_insert_with(HashMap::new).insert(name, succ);
                     }
                     NodeType::Directory => {
-                        path_node.insert(succ, path);
+                        path_node.insert(succ, path.clone());
+                        dirs.insert(path.clone(), succ);
+                        dirs_reverse.insert(succ, path);
                         to_visit.push_front(succ);
                     }
                     _ => continue,
@@ -127,66 +136,117 @@ where
             }
         }
     }
-    res
+    (res, dirs, dirs_reverse)
 }
 
 /// Compare the two given map of <path, node id content>.
 /// return the map of the content that got altered <(path, id content), categ of alteration>
 /// Change this function to count the amount of content modified vs removed
-fn compare_dir(
-    dir_src: &HashMap<String, usize>,
-    dir_dst: &HashMap<String, usize>,
-) -> HashMap<(String, usize), Option<env::SubCateg>> {
+fn compare_dir<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+    file_paths: &HashMap<usize, HashMap<String, usize>> ,
+    dirs: &HashMap<String, usize>,
+    dirs_reverse: &HashMap<usize, String>,
+    dir_dst: usize,
+    graph: &G,
+    map: &mut HashMap<(String, usize), Option<env::SubCateg>>,
+
+) -> HashMap<(String, usize), Option<env::SubCateg>>
+where
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
+    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
+    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
+
+ {
     let mut res: HashMap<(String, usize), Option<env::SubCateg>> = HashMap::new();
     let mut modified = false;
     let mut removed = false;
-    for (path, cnt_id) in dir_src.into_iter() {
-        match dir_dst.get(path) {
-            Some(node_id) => {
-                if node_id == cnt_id {
-                    res.insert((path.to_owned(), cnt_id.to_owned()), None);
-                } else {
-                    res.insert(
-                        (path.to_owned(), cnt_id.to_owned()),
-                        Some(env::SubCateg::FileModified),
-                    );
-                    modified = true;
-                }
-            }
-            None => {
-                res.insert(
-                    (path.to_owned(), cnt_id.to_owned()),
-                    Some(env::SubCateg::FileRemoved),
-                );
-                removed = true;
-            }
+    //todo!("if dir path and node found, skip");
+    //todo!("if found all file paths, end");
+
+    let mut path_node = HashMap::new();
+    path_node.insert(dir_dst, String::from("."));
+    
+    let mut to_visit = VecDeque::new();
+    to_visit.push_back(dir_dst);
+    let mut visited = HashSet::new();
+    while let Some(node) = to_visit.pop_front(){
+        if visited.contains(&node) {
+            continue;
         }
-        if modified && removed {
-            break;
+        visited.insert(node);
+        for (succ, labels) in graph.labeled_successors(node){
+            for label in labels{
+                let name: String;
+                if let EdgeLabel::DirEntry(dir) = label{
+                    name = String::from_utf8_lossy(&graph.properties().label_name(dir.filename_id())).to_string();
+
+                }else{
+                    continue;
+                }
+                let path = format!(
+                    "{}/{}",
+                    path_node
+                        .get(&node)
+                        .expect("couldn't find path in path_node"),
+                    name
+                );
+                match graph.properties().node_type(succ) {
+                    NodeType::Content => {
+                        //res.insert(path, succ);
+                    }
+                    NodeType::Directory => {
+                        path_node.insert(succ, path.clone());
+                        if let Some(d) = dirs.get(&path){
+                            if *d == succ{
+                                continue;
+                            }
+                        }
+                        to_visit.push_front(succ);
+                    }
+                    _ => continue,
+                } 
+            }
         }
     }
-    // To modify if I want to count each amount
-    // dir_src
-    //     .iter()
-    //     .for_each(|(path, cnt_id)| match dir_dst.get(path) {
-    //         Some(node_id) => {
-    //             if node_id == cnt_id {
-    //                 res.insert((path.to_owned(), cnt_id.to_owned()), None);
-    //             } else {
-    //                 res.insert(
-    //                     (path.to_owned(), cnt_id.to_owned()),
-    //                     Some(env::SubCateg::FileModified),
-    //                 );
-    //             }
-    //         }
-    //         None => {
-    //             res.insert(
-    //                 (path.to_owned(), cnt_id.to_owned()),
-    //                 Some(env::SubCateg::FileRemoved),
-    //             );
-    //         }
-    //     });
+
     res
+}
+
+pub fn check_branch<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+    snap_dst: &str,
+    branch: &str,
+    graph: &G,
+) -> bool
+where
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+    <G as SwhGraphWithProperties>::Strings: swh_graph::properties::Strings,
+    <G as SwhGraphWithProperties>::Persons: swh_graph::properties::Persons,
+    <G as SwhGraphWithProperties>::Timestamps: swh_graph::properties::Timestamps,
+{
+    let props = graph.properties();
+
+    let snap_id = props
+        .node_id(snap_dst)
+        .expect(&format!("couldn't find {} in the graph", snap_dst));
+    //Check if the branch still exists
+    for (_, labels) in graph.labeled_successors(snap_id) {
+        for label in labels {
+            let curr_branch: String;
+            if let EdgeLabel::Branch(b) = label {
+                curr_branch =
+                    String::from_utf8_lossy(&props.label_name(b.filename_id())).to_string();
+            } else {
+                continue;
+            }
+            if &curr_branch == branch {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn update_changes(
@@ -381,7 +441,9 @@ where
 }
 
 fn dir_changes<G: SwhLabeledForwardGraph + SwhGraphWithProperties + SwhLabeledBackwardGraph>(
-    dir: HashMap<String, usize>,
+    lc: HashMap<usize, HashMap<String, usize>>,
+    dirs: HashMap<String, usize>,
+    dirs_reverse: HashMap<usize, String>,
     rev_swhid: &str,
     snap_dst: &str,
     branch: &str,
@@ -397,29 +459,9 @@ where
     let mut res = HashMap::new();
     let props = graph_t.properties();
 
-    let snap_id = props
-        .node_id(snap_dst)
-        .expect(&format!("couldn't find {} in the graph", snap_dst));
-    //Check if the branch still exists
-    let mut rev_id: Option<usize> = None;
-    'global: for (succ, labels) in graph_t.labeled_successors(snap_id) {
-        for label in labels {
-            let curr_branch: String;
-            if let EdgeLabel::Branch(b) = label {
-                curr_branch =
-                    String::from_utf8_lossy(&props.label_name(b.filename_id())).to_string();
-            } else {
-                continue;
-            }
-            if &curr_branch == branch {
-                rev_id = Some(succ);
-                break 'global;
-            }
-        }
+    if !check_branch(snap_dst, branch, graph_t){
+        return None;
     }
-    let Some(_) = rev_id else {
-        return None; //all the changes are SubCateg::REMOVED --> branch disapeared
-    };
 
     // node id of altered commit
     let rev_mc: usize = graph_t
@@ -440,12 +482,14 @@ where
         }
     }
 
-    match find_revs(rev_mc, succs, graph_t) {
+    // init_res_change(&lc, &dirs_reverse, &mut res);
+    match find_revs(rev_mc, succs, branch, snap_dst, graph_t) {
         Some(rev_to_explore) => {
             rev_to_explore.into_iter().for_each(|rev| {
                 if let Some(dir_dst) = get_dir(props.swhid(rev).to_string().as_str(), graph_t) {
-                    let changes = compare_dir(&dir, &get_list_of_content(dir_dst, graph_t));
-                    update_changes(&mut res, changes);
+                    todo!("finish comparaison");
+                    let changes = compare_dir(&lc, &dirs, &dirs_reverse, dir_dst, graph_t, &mut res);
+                    // update_changes(&mut res, changes);
                 } else {
                     warn!("couldn't find dir for rev {}", props.swhid(rev).to_string());
                     env::REV_WITHOUT_DIR.fetch_add(1, Ordering::Relaxed);
@@ -480,7 +524,7 @@ fn get_list_of_changes(
     res
 }
 
-fn find_initial_rev<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+pub fn find_initial_rev<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snap_swhid: &str,
     graph: &G,
 ) -> Option<usize>
@@ -521,7 +565,7 @@ where
     None
 }
 
-fn find_successors<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+pub fn find_successors<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     rev_id: usize,
     graph: &G,
 ) -> Option<HashSet<usize>>
@@ -552,9 +596,11 @@ where
 
 /// return all the commits predecessors of the altered commits.
 /// goes to a max depth of `env::MAX_DEPTH`
-fn find_revs<G: SwhLabeledBackwardGraph + SwhGraphWithProperties>(
+pub fn find_revs<G: SwhLabeledBackwardGraph + SwhGraphWithProperties + SwhLabeledForwardGraph>(
     missing_commit: usize,
     succs: HashSet<usize>,
+    branch_name: &str,
+    snap_dst: &str,
     graph_t: &G,
 ) -> Option<HashSet<usize>>
 where
@@ -658,6 +704,7 @@ fn line_classification<
 >(
     //res: &mut HashMap<(String, String, String, String, String, Option<String>), env::Categ>,
     line: (String, String, String, String, String),
+    // url, snap src, branch, altered commit, snap dst
     graph_t: &G,
 ) -> Option<(
     (String, String, String, String, String, Option<String>),
@@ -686,10 +733,6 @@ where
                 } else {
                     categ = meta_changes(&line.3, fd, graph_t);
                 }
-                // res.insert(
-                //     (line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)),
-                //     categ,
-                // );
                 return Some((
                     (line.0, line.1, line.2, line.3, line.4, Some(fd_swhid)),
                     categ,
@@ -701,17 +744,14 @@ where
                     main_categ: env::MainCateg::DIR,
                     sub_categ: HashSet::new(),
                 };
-                let lc = get_list_of_content(dir, graph_t);
-                let changes = dir_changes(lc, &line.3, &line.4, &line.2, graph_t);
-                match changes {
-                    Some(changes) => {
-                        categ.sub_categ = get_list_of_changes(changes);
-                    }
-                    None => {
-                        categ.sub_categ.insert(env::SubCateg::RemovedBranch); // only usefull if removed_branch is true
-                    }
+                if check_branch(&line.4, &line.2, graph_t){
+                    let mut lc = dir_changes::get_list_of_content(dir, graph_t);
+                    dir_changes::dir_changes(&mut lc, &line.3, &line.4, &line.2, graph_t);
+                    categ.sub_categ = dir_changes::get_list_of_changes(&lc);
                 }
-                //res.insert((line.0, line.1, line.2, line.3, line.4, None), categ);
+                else{
+                    categ.sub_categ.insert(env::SubCateg::RemovedBranch);
+                }
                 return Some(((line.0, line.1, line.2, line.3, line.4, None), categ));
             }
         }

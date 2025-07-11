@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod classes;
 pub mod env;
+pub mod dir_changes;
 use anyhow::{ensure, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};

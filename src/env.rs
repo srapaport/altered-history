@@ -86,6 +86,7 @@ pub enum SubCateg {
     RemovedBranch, //TODO
     FileModified,
     FileRemoved,
+    FileFound,
     ContentSplit,
     #[default]
     Other,
@@ -103,6 +104,7 @@ impl fmt::Display for SubCateg {
             SubCateg::RemovedBranch => write!(f, "RemovedBranch"), //TODO
             SubCateg::FileModified => write!(f, "FileModified"),
             SubCateg::FileRemoved => write!(f, "FileRemoved"),
+            SubCateg::FileFound => write!(f, "FileFound"),
             SubCateg::ContentSplit => write!(f, "ContentSplit"),
             SubCateg::Other => write!(f, "Other"),
         }
