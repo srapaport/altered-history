@@ -7,16 +7,24 @@ use log::LevelFilter;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-const GRAPH_PATH: &str = "/poolswh/softwareheritage/graph/2025-05-18/compressed/graph";
-const RESULTS_PATH: &str = "/home/infres/rapaport/results/FULL_2025_05_18"; // kept for log directory
+const GRAPH_PATH: &str = "/dev/shm/swh-graph/current/graph";// /path/to/compressed/graph --> keep the name of the graph (often graph) without any extension
+const RESULTS_PATH: &str = "/home/infres/rapaport/results/FULL_2025_05_18";// /path/to/results/directory
+const EXPECTED_ORIGINS: usize = 373_130_808;
+const GRAPH_PATH_TEASE: &str = "/home/infres/rapaport/datasets/2024-08-23-popular-500-python/compressed/graph";
+const RESULTS_PATH_SINGLE: &str = "/home/infres/rapaport/results/bahamut";
+const RESULTS_PATH_TEASE: &str = "/home/infres/rapaport/results/TEASE_2024_08_23_new";
+const EXPECTED_ORIGINS_TEASE: usize = 443;
+const NEW_GRAPH: &str = "/swh/scratch/graph/2026-03-02/compressed/graph";
+const NEW_ORIGINS: usize = 429_613_456;
+const RESULTS_NEW: &str = "/swh/scratch/rapaport/results/altered-history";
 
 fn main() {
     let opts = altered_history::env::Options {
-        graph: String::from(GRAPH_PATH),
-        results: String::from(RESULTS_PATH),
-        expected_origins: 373_130_808,
-        chunk: 50_000,
-        removed_branch: false,
+        graph: String::from(NEW_GRAPH),
+        results: String::from(RESULTS_NEW),
+        expected_origins: NEW_ORIGINS,
+        chunk: 50_000, // arbitrary
+        removed_branch: false, // not use yet --> detect when a branch was deleted
     };
 
     let tables = db::TableNames::from_graph_path(GRAPH_PATH);
@@ -26,7 +34,7 @@ fn main() {
         .log_to_file(
             flexi_logger::FileSpec::default()
                 .directory(format!("{}/logs", opts.results))
-                .basename("FULL_2025_05")
+                .basename("2025_05_18")
                 .suffix("log"),
         )
         .rotate(
@@ -52,6 +60,10 @@ fn main() {
     altered_history::main_all_mpsc_with_cp(&opts, cp, &pool, &rt, &tables);
 
     println!(
+        "Origins rejected: {}",
+        env::ORI_REJECTED.load(Ordering::Relaxed)
+    );
+    info!(
         "Origins rejected: {}",
         env::ORI_REJECTED.load(Ordering::Relaxed)
     );

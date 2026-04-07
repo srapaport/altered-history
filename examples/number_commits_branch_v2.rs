@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use counter::Counter;
 use rayon::prelude::*;
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -21,9 +20,6 @@ fn main(){
         .load_labels()
         .expect("Could not load labels");
 
-    let res: Counter<String, usize> = Counter::new();
-    let res = Arc::new(Mutex::new(res));
-
     let bar = Arc::new(ProgressBar::new(graph.num_nodes() as u64));
     bar.set_style(
         ProgressStyle::with_template(
@@ -33,15 +29,15 @@ fn main(){
     );
     bar.set_message("going through graph");
 
-    let revision_cache = Arc::new(Mutex::new(HashMap::new()));
+    let revision_cache: Arc<Mutex<HashMap<String, HashSet<usize>>>> = Arc::new(Mutex::new(HashMap::new()));
     
     (0..graph.num_nodes()).into_par_iter().for_each(|node|{
         bar.inc(1);
         if graph.properties().node_type(node) != NodeType::Origin{
             return;
         }
-        let mut local_res: Counter<String, usize> = Counter::new();
-        //let revision_cache = Arc::new(Mutex::new(HashMap::new()));
+
+        let local_cache = Arc::new(Mutex::new(HashMap::new()));
         
         for (succ, labels) in graph.labeled_successors(node){
             if graph.properties().node_type(succ) != NodeType::Snapshot{
@@ -50,38 +46,34 @@ fn main(){
             for label in labels{
                 if let EdgeLabel::Visit(visit) = label{
                     if visit.status() == VisitStatus::Full{
-                        count_rev(succ, &mut local_res, revision_cache.clone(), &graph);
+                        count_rev(succ, local_cache.clone(), &graph);
                     }
                 }
             }
         }
+
+        let local_cache = Arc::try_unwrap(local_cache).unwrap().into_inner().unwrap();
+        let mut cache_guard = revision_cache.lock().unwrap();
+        cache_guard.extend(local_cache);
         
-        // Merge local results into global counter
-        if !local_res.is_empty() {
-            let mut global_res = res.lock().unwrap();
-            for (branch, count) in local_res {
-                global_res[&branch] += count;
-            }
-        }
     });
 
     bar.finish();
     
-    let res = Arc::try_unwrap(res).unwrap().into_inner().unwrap();
+    let res = Arc::try_unwrap(revision_cache).unwrap().into_inner().unwrap();
     let mut csv_wrt = csv::WriterBuilder::new()
         .from_path(format!("results/commits_per_branch_FULL.csv"))
         .unwrap();
     csv_wrt.write_record(&["branch_name", "count"]).unwrap();
-    for (branch, count) in res{
-        csv_wrt.write_record(&[branch, format!("{}", count)]).unwrap();
+    for (branch, revs) in res{
+        csv_wrt.write_record(&[branch, format!("{}", revs.into_iter().count())]).unwrap();
     }
     csv_wrt.flush().unwrap();
 }
 
 fn count_rev<G: SwhLabeledForwardGraph + SwhGraphWithProperties + Sync>(
     snap: usize,
-    counter: &mut Counter<String, usize>,
-    cache: Arc<Mutex<HashMap<usize, usize>>>,
+    cache: Arc<Mutex<HashMap<String, HashSet<usize>>>>,
     graph: &G)
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
@@ -106,22 +98,21 @@ where
     }
 
     let mut revision_to_branches: HashMap<usize, Vec<String>> = HashMap::new();
+    todo!("make the map global and use it as a cache -> is the rev has already been use for this branch ?");
     for (branch_name, rev) in branch_revisions {
         revision_to_branches.entry(rev).or_default().push(branch_name);
     }
 
-    let branch_results: Vec<(String, usize)> = revision_to_branches
+    revision_to_branches
         .into_par_iter()
-        .flat_map(|(start_rev, branch_names)| {
-            let reachable_revisions = get_reachable_revisions(start_rev, graph, cache.clone());
-            branch_names.into_par_iter().map(move |branch_name| (branch_name, reachable_revisions))
-        })
-        .collect();
+        .for_each(|(start_rev, branch_names)| {
+            let reachable_revisions = get_reachable_revisions(start_rev, graph);
+            let mut cache_guard = cache.lock().unwrap();
+            branch_names.into_iter().for_each(|branch|{
+                cache_guard.entry(branch).or_insert_with(HashSet::new).extend(reachable_revisions.clone());
+            });
+        });
 
-    // Update counter with results
-    for (branch_name, count) in branch_results {
-        counter[&branch_name] += count;
-    }
 }
 
 fn get_rel_labels<G: SwhLabeledForwardGraph + SwhGraphWithProperties + Sync>(
@@ -151,19 +142,12 @@ where
 fn get_reachable_revisions<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     start_rev: usize,
     graph: &G,
-    cache: Arc<Mutex<HashMap<usize, usize>>>,
-) -> usize
+) -> HashSet<usize>
 where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
 {
-    {
-        let cache_guard = cache.lock().unwrap();
-        if let Some(cached) = cache_guard.get(&start_rev) {
-            return *cached;
-        }
-    }
     
-    let mut reachable = 0;
+    let mut reachable = HashSet::new();
     let mut to_visit = vec![start_rev];
     let mut visited = HashSet::new();
     
@@ -172,26 +156,14 @@ where
             continue;
         }
         visited.insert(visiting);
-        reachable += 1;
+        reachable.insert(visiting);
         
         for succ in graph.successors(visiting) {
-            if graph.properties().node_type(succ) == NodeType::Revision && !visited.contains(&succ){
-                {
-                    let cache_guard = cache.lock().unwrap();
-                    if let Some(cached_reachable) = cache_guard.get(&succ) {
-                        reachable += cached_reachable;
-                        visited.insert(succ);
-                        continue;
-                    }
-                }
+            if graph.properties().node_type(succ) == NodeType::Revision{
                 to_visit.push(succ);
             }
         }
     }
-    
-    {
-        let mut cache_guard = cache.lock().unwrap();
-        cache_guard.insert(start_rev, reachable);
-    }
+
     reachable
 }
