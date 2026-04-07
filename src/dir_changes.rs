@@ -10,7 +10,7 @@ use crate::env;
 pub struct FileSystemTree {
     pub directories: HashMap<String, DirectoryInfo>,
     pub files: HashMap<String, FileInfo>,
-    // Reverse lookups for performance
+    // Reverse
     pub node_to_dir_path: HashMap<usize, String>,
     pub node_to_file_path: HashMap<usize, String>,
 }
@@ -54,47 +54,6 @@ impl FileSystemTree {
         let node_id = file_info.node_id;
         self.node_to_file_path.insert(node_id, path.clone());
         self.files.insert(path, file_info);
-    }
-    
-    // Check if a node_id with specific name exists
-    pub fn has_node_with_name(&self, node_id: usize, name: &str) -> bool {
-        // Check if it's a directory
-        if let Some(dir_path) = self.node_to_dir_path.get(&node_id) {
-            if let Some(dir) = self.directories.get(dir_path) {
-                return dir.path.split('/').last().unwrap_or("") == name;
-            }
-        }
-        
-        // Check if it's a file
-        if let Some(file_path) = self.node_to_file_path.get(&node_id) {
-            if let Some(file) = self.files.get(file_path) {
-                return file.filename == name;
-            }
-        }
-        
-        false
-    }
-    
-    // Get node info by node_id
-    pub fn get_node_info(&self, node_id: usize) -> Option<(&str, bool)> {
-        // Returns (path, is_directory)
-        if let Some(path) = self.node_to_dir_path.get(&node_id) {
-            return Some((path, true));
-        }
-        if let Some(path) = self.node_to_file_path.get(&node_id) {
-            return Some((path, false));
-        }
-        None
-    }
-    
-    // Check if a file exists at a specific path
-    pub fn has_file_at_path(&self, path: &str) -> Option<usize> {
-        self.files.get(path).map(|file| file.node_id)
-    }
-    
-    // Check if a directory exists at a specific path
-    pub fn has_directory_at_path(&self, path: &str) -> Option<usize> {
-        self.directories.get(path).map(|dir| dir.node_id)
     }
 
     pub fn get_all_file_paths_in_directory(&self, dir_path: &str) -> Vec<String> {

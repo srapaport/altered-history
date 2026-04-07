@@ -380,6 +380,27 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                     if graph.properties().node_type(ori) != NodeType::Origin {
                         continue;
                     }
+                    ////////////////////////// TO REMOVE
+                    // let url = "https://github.com/DALnet/bahamut";
+                    // let Some(current_url) = graph.properties().message(ori) else{
+                    //     count_origins.fetch_add(1, Ordering::Relaxed);
+                    //     tx.send(None).expect("Failed sending the msg");
+                    //     bar.inc(1);
+                    //     continue;
+                    // };
+                    // let Ok(current_url) = String::from_utf8(current_url) else{
+                    //     count_origins.fetch_add(1, Ordering::Relaxed);
+                    //     tx.send(None).expect("Failed sending the msg");
+                    //     bar.inc(1);
+                    //     continue;
+                    // };
+                    // if url != current_url.as_str(){
+                    //     count_origins.fetch_add(1, Ordering::Relaxed);
+                    //     tx.send(None).expect("Failed sending the msg");
+                    //     bar.inc(1);
+                    //     continue;
+                    // }
+                    ////////////////////////// TO REMOVE
                     let mut amount_visit = 0;
                     graph
                         .labeled_successors(ori)
@@ -472,7 +493,15 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
             "Amount of origins kept: {}",
             amount_of_ori_kept.load(Ordering::Relaxed)
         );
+        info!(
+            "Amount of origins kept: {}",
+            amount_of_ori_kept.load(Ordering::Relaxed)
+        );
         println!(
+            "Amount of origins ignored (less than 2 visits): {}",
+            amount_of_ori_less_2_visit.load(Ordering::Relaxed)
+        );
+        info!(
             "Amount of origins ignored (less than 2 visits): {}",
             amount_of_ori_less_2_visit.load(Ordering::Relaxed)
         );
