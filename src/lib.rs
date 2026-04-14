@@ -331,6 +331,7 @@ pub fn main_all_mpsc_with_cp(
     checkpoint_opt: Option<HashSet<String>>,
     pool: &PgPool,
     rt: &tokio::runtime::Runtime,
+    tables: &db::TableNames,
 ) {
     let graph_path = PathBuf::from(opts.graph.as_str());
     let number_of_origins: usize = opts.expected_origins;
@@ -485,10 +486,10 @@ pub fn main_all_mpsc_with_cp(
             let (ori_swhid, ori_url, value) = package;
             if let Some(mc) = value {
                 if pending_records.len() > chunk {
-                    rt.block_on(db::batch_insert_altered_commits(pool, &pending_records))
+                    rt.block_on(db::batch_insert_altered_commits(pool, tables, &pending_records))
                         .expect("Failed to flush records to DB");
                     pending_records.clear();
-                    rt.block_on(db::insert_checkpoints(pool, &cp))
+                    rt.block_on(db::insert_checkpoints(pool, tables, &cp))
                         .expect("Failed to insert checkpoints");
                     cp.clear();
                 }
@@ -509,11 +510,11 @@ pub fn main_all_mpsc_with_cp(
         }
     }
     if !pending_records.is_empty() {
-        rt.block_on(db::batch_insert_altered_commits(pool, &pending_records))
+        rt.block_on(db::batch_insert_altered_commits(pool, tables, &pending_records))
             .expect("Failed to flush remaining records to DB");
     }
     if !cp.is_empty() {
-        rt.block_on(db::insert_checkpoints(pool, &cp))
+        rt.block_on(db::insert_checkpoints(pool, tables, &cp))
             .expect("Failed to insert remaining checkpoints");
     }
     jh.join().unwrap();

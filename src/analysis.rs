@@ -60,9 +60,10 @@ pub fn focus_missing_commits_from_db(
     opts: &env::Options,
     pool: &PgPool,
     rt: &tokio::runtime::Runtime,
+    tables: &db::TableNames,
 ) -> bool {
     let detected = rt
-        .block_on(db::load_detected_commits(pool))
+        .block_on(db::load_detected_commits(pool, tables))
         .expect("Failed to load detected commits from DB");
 
     if detected.is_empty() {
@@ -98,7 +99,7 @@ pub fn focus_missing_commits_from_db(
         detected.len()
     );
 
-    rt.block_on(db::promote_to_root_cause(pool, &root_cause))
+    rt.block_on(db::promote_to_root_cause(pool, tables, &root_cause))
         .expect("Failed to promote root cause commits in DB");
 
     true

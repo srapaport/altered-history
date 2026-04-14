@@ -19,6 +19,9 @@ fn main() {
         removed_branch: false,
     };
 
+    let tables = db::TableNames::from_graph_path(GRAPH_PATH);
+    println!("Using tables: {:?}", tables);
+
     Logger::with(LevelFilter::Info)
         .log_to_file(
             flexi_logger::FileSpec::default()
@@ -38,17 +41,15 @@ fn main() {
     let pool = rt
         .block_on(db::init_pool())
         .expect("Failed to initialize DB pool");
-    rt.block_on(db::create_tables(&pool))
+    rt.block_on(db::create_tables(&pool, &tables))
         .expect("Failed to create DB tables");
 
     println!("START");
 
     // Step 1: Retrieve History Alterations
     let start = Instant::now();
-    let cp = rt
-        .block_on(db::load_checkpoints(&pool))
-        .ok();
-    altered_history::main_all_mpsc_with_cp(&opts, cp, &pool, &rt);
+    let cp = rt.block_on(db::load_checkpoints(&pool, &tables)).ok();
+    altered_history::main_all_mpsc_with_cp(&opts, cp, &pool, &rt, &tables);
 
     println!(
         "Origins rejected: {}",
@@ -59,7 +60,7 @@ fn main() {
 
     // Step 2: Identify Root Cause Commits
     let start = Instant::now();
-    if altered_history::analysis::focus_missing_commits_from_db(&opts, &pool, &rt) {
+    if altered_history::analysis::focus_missing_commits_from_db(&opts, &pool, &rt, &tables) {
         info!("Focus finished!");
     }
     println!("Focus complete | time elapsed: {:.2?}", start.elapsed());
@@ -67,7 +68,7 @@ fn main() {
 
     // Step 3: Categorize Root Cause Commits
     let start = Instant::now();
-    classes::categorization_all_from_db(&opts, &pool, &rt);
+    classes::categorization_all_from_db(&opts, &pool, &rt, &tables);
     println!(
         "Classification complete | time elapsed: {:.2?}",
         start.elapsed()

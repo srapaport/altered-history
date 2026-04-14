@@ -779,6 +779,7 @@ pub fn categorization_all_from_db(
     opts: &env::Options,
     pool: &PgPool,
     rt: &tokio::runtime::Runtime,
+    tables: &db::TableNames,
 ) -> bool {
     let graph_name: String = opts.graph.clone();
 
@@ -799,7 +800,7 @@ pub fn categorization_all_from_db(
         .expect("Could not load labels");
 
     let commits = rt
-        .block_on(db::load_root_cause_commits(pool))
+        .block_on(db::load_root_cause_commits(pool, tables))
         .expect("Failed to load root_cause commits from DB");
 
     if commits.is_empty() {
@@ -814,7 +815,7 @@ pub fn categorization_all_from_db(
 
     info!("Classified {} commits, writing to DB", updates.len());
 
-    rt.block_on(db::batch_update_classification(pool, &updates))
+    rt.block_on(db::batch_update_classification(pool, tables, &updates))
         .expect("Failed to batch update classifications in DB");
 
     info!("Classification complete.");
