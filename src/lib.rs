@@ -1,21 +1,19 @@
 pub mod analysis;
 pub mod classes;
+pub mod db;
 pub mod env;
 pub mod dir_changes;
 use anyhow::{ensure, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use rayon::ThreadPoolBuilder;
+use sqlx::PgPool;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs;
-use std::fs::File;
-use std::io::{prelude::*, BufReader};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::thread;
 use swh_graph::mph::DynMphf;
-//use std::time::Instant;
 use swh_graph::graph::*;
 use swh_graph::labels::{EdgeLabel, VisitStatus};
 use swh_graph::NodeType;
@@ -325,12 +323,16 @@ where
     Ok(snapshots)
 }
 
-/// Find all altered commits from the given graph and orc files
-/// Start where the last checkpoint stoped
-/// Write the results at opts.results
-pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet<String>>) {
+/// Find all altered commits from the given graph
+/// Start where the last checkpoint stopped
+/// Write the results to the altered_histories DB table
+pub fn main_all_mpsc_with_cp(
+    opts: &env::Options,
+    checkpoint_opt: Option<HashSet<String>>,
+    pool: &PgPool,
+    rt: &tokio::runtime::Runtime,
+) {
     let graph_path = PathBuf::from(opts.graph.as_str());
-    let prefix_res: &str = opts.results.as_str();
     let number_of_origins: usize = opts.expected_origins;
     let chunk: usize = opts.chunk;
     let checkpoint: HashSet<String>;
@@ -363,7 +365,7 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
             .expect("Could not load labels");
 
         let count_origins = AtomicUsize::new(0);
-        let pool = ThreadPoolBuilder::new()
+        let thread_pool = ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap();
@@ -374,7 +376,7 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
             )
             .unwrap(),
         );
-        pool.install(|| {
+        thread_pool.install(|| {
             rayon::scope(|thread| {
                 for ori in 0..graph.num_nodes() {
                     if graph.properties().node_type(ori) != NodeType::Origin {
@@ -405,7 +407,6 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                             count_origins.fetch_add(1, Ordering::Relaxed);
                             let ori_swhid = graph.properties().swhid(ori).to_string();
                             let thread_id = unsafe { gettid() };
-                            ///////// Skipping if necessary according to the checkpoints
                             if !(*checkpoint).contains(&ori_swhid) {
                                 if let Some(url) = graph.properties().message(ori) {
                                     let ori_url = String::from_utf8_lossy(&url).to_string();
@@ -424,7 +425,6 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
                                             .collect();
                                     debug!("    sorted snapshots: {:?}", sorted_snapshots);
 
-                                    ///////////// altered_commits
                                     if let Some(curr_altered_commits) = altered_commits(
                                         &mut VecDeque::from(sorted_snapshots),
                                         removed_branch,
@@ -477,120 +477,46 @@ pub fn main_all_mpsc_with_cp(opts: &env::Options, checkpoint_opt: Option<HashSet
             amount_of_ori_less_2_visit.load(Ordering::Relaxed)
         );
     });
-    // Receive results in parallel and write them at the frequency of opts.chunk
-    let mut res: HashMap<String, HashSet<(String, String, String, String)>> = HashMap::new();
+
+    let mut pending_records: Vec<env::AlteredCommit> = Vec::new();
     let mut cp: HashSet<String> = HashSet::new();
     for _ in 0..number_of_origins {
         if let Some(package) = rx.recv().expect("Couldn't receive data") {
             let (ori_swhid, ori_url, value) = package;
             if let Some(mc) = value {
-                if res.len() > chunk {
-                    flush_map(prefix_res, &mut res);
-                    create_cp(prefix_res, &mut cp);
+                if pending_records.len() > chunk {
+                    rt.block_on(db::batch_insert_altered_commits(pool, &pending_records))
+                        .expect("Failed to flush records to DB");
+                    pending_records.clear();
+                    rt.block_on(db::insert_checkpoints(pool, &cp))
+                        .expect("Failed to insert checkpoints");
+                    cp.clear();
                 }
-                res.insert(ori_url, mc);
+                for (snap_src, branch, commit, snap_dst) in mc {
+                    pending_records.push(env::AlteredCommit {
+                        origin: ori_url.clone(),
+                        snapshot_src: snap_src,
+                        branch_name: branch,
+                        missing_commit: commit,
+                        snapshot_dst: snap_dst,
+                        first_difference: None,
+                        main_category: None,
+                        sub_categories: None,
+                    });
+                }
             }
             cp.insert(ori_swhid);
         }
     }
-    if res.len() > 0 {
-        flush_map(prefix_res, &mut res);
+    if !pending_records.is_empty() {
+        rt.block_on(db::batch_insert_altered_commits(pool, &pending_records))
+            .expect("Failed to flush remaining records to DB");
     }
-    if cp.len() > 0 {
-        create_cp(prefix_res, &mut cp);
+    if !cp.is_empty() {
+        rt.block_on(db::insert_checkpoints(pool, &cp))
+            .expect("Failed to insert remaining checkpoints");
     }
     jh.join().unwrap();
-}
-
-/// writes the current results with chunk amount of results in prefix
-fn flush_map(prefix: &str, map: &mut HashMap<String, HashSet<(String, String, String, String)>>) {
-    let swhid = format!("{}", map.iter().next().unwrap().1.iter().next().unwrap().0);
-    let filename = format!("{}/{}.csv", prefix, swhid);
-    let filename_tmp = format!("{}/{}.tmp", prefix, swhid);
-    if let Ok(_) = fs::metadata(&filename_tmp) {
-        warn!(
-            "lib.rs > flush_map | File {} already exists!",
-            &filename_tmp
-        );
-        return;
-    }
-    // let Ok(mut file_w) = File::create_new(format!("{}", filename_tmp)) else {
-    //     warn!("File {} already exists!", filename_tmp);
-    //     return;
-    // };
-    let mut csv_wrt = csv::WriterBuilder::new()
-        .delimiter(b';')
-        .from_path(filename_tmp.as_str())
-        .unwrap();
-    // file_w
-    //     .write("origin;snapshot_src;branch_name;missing_commit;snapshot_dst\n".as_bytes())
-    //     .expect(format!("couldn't write headings in file: {}", filename_tmp).as_str());
-    map.iter().for_each(|v| {
-        v.1.iter().for_each(|set| {
-            let record = env::AlteredCommit {
-                origin: v.0.to_string(),
-                snapshot_src: set.0.to_string(),
-                branch_name: set.1.to_string(),
-                missing_commit: set.2.to_string(),
-                snapshot_dst: set.3.to_string(),
-                first_difference: None,
-                main_category: None,
-                sub_categories: None,
-            };
-            csv_wrt.serialize(record).unwrap();
-            // file_w
-            //     .write(format!("{};{};{};{};{}\n", replace_semicolon(v.0), replace_semicolon(&set.0), replace_semicolon(&set.1), replace_semicolon(&set.2), replace_semicolon(&set.3)).as_bytes())
-            //     .expect(format!("couldn't write datas in file: {}", filename_tmp).as_str());
-        });
-    });
-    csv_wrt.flush().unwrap();
-    map.clear();
-    //drop(file_w); // didn't end with this instruction one time
-    std::fs::rename(&filename_tmp, &filename)
-        .expect(format!("Couldn't rename {} into {}", filename_tmp, filename).as_str());
-}
-
-/// creates a new checkpoint in the file checkpoints
-fn create_cp(prefix: &str, cp: &mut HashSet<String>) {
-    let filename = format!("{}/checkpoints", prefix);
-    if let Err(_) = fs::metadata(&filename) {
-        File::create_new(&filename)
-            .expect(format!("lib.rs > create_cp | File {} already exists!", &filename).as_str());
-    }
-    let mut cp_file = fs::OpenOptions::new()
-        .append(true)
-        .open(filename)
-        .expect(format!("cannot open checkpoints file").as_str());
-    cp.iter().for_each(|ori| {
-        cp_file
-            .write(format!("{}\n", ori).as_bytes())
-            .expect("couldn't write data in checkpoints");
-    });
-    cp.clear();
-}
-
-/// Load a checkpoint file
-/// return the set of origins already parsed if there's a checkpoint
-/// None otherwise
-pub fn load_checkpoint(opts: &env::Options) -> Option<HashSet<String>> {
-    let prefix: &str = opts.results.as_str();
-    let mut res = HashSet::new();
-
-    if let Ok(cp_file) = File::open(format!("{}/checkpoints", prefix)) {
-        BufReader::new(cp_file)
-            .lines()
-            .into_iter()
-            .for_each(|line| {
-                if let Ok(ori) = line {
-                    res.insert(ori);
-                }
-            });
-    } else {
-        info!("couldn't open checkpoints file");
-        return None;
-    }
-
-    return Some(res);
 }
 
 pub fn main_single_origin(
