@@ -27,7 +27,7 @@ fn main() {
         removed_branch: false, // not use yet --> detect when a branch was deleted
     };
 
-    let tables = db::TableNames::from_graph_path(GRAPH_PATH);
+    let tables = db::TableNames::from_graph_path(NEW_GRAPH);
     println!("Using tables: {:?}", tables);
 
     Logger::with(LevelFilter::Info)
