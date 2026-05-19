@@ -34,7 +34,7 @@ fn main() {
         .log_to_file(
             flexi_logger::FileSpec::default()
                 .directory(format!("{}/logs", opts.results))
-                .basename("2025_05_18")
+                .basename("2026_03_02")
                 .suffix("log"),
         )
         .rotate(
