@@ -41,3 +41,4 @@ __pycache__/
 *test*
 python/*
 .cargo-home/*
+*.env
