@@ -20,7 +20,7 @@ const RESULTS_NEW: &str = "/swh/scratch/rapaport/results/altered-history";
 
 fn main() {
     let opts = altered_history::env::Options {
-        graph: String::from(NEW_GRAPH),
+        graph: String::from(GRAPH_PATH),
         results: String::from(RESULTS_NEW),
         expected_origins: NEW_ORIGINS,
         chunk: 50_000, // arbitrary
