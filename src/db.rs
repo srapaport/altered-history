@@ -198,73 +198,149 @@ pub async fn load_checkpoints(pool: &PgPool, tables: &TableNames) -> Result<Hash
     Ok(rows.into_iter().map(|(s,)| s).collect())
 }
 
-pub async fn load_detected_commits(
+/// Returns the next page of distinct origins (ordered) that still have
+/// `detected` commits, strictly greater than `after`. Used to stream the focus
+/// step one bounded batch of *whole* origins at a time instead of loading the
+/// entire table into memory.
+pub async fn load_detected_origins_after(
     pool: &PgPool,
     tables: &TableNames,
-) -> Result<HashSet<(String, String, String, String, String)>> {
+    after: &str,
+    limit: i64,
+) -> Result<Vec<String>> {
     let q = format!(
-        "SELECT origin, snapshot_src, branch_name, missing_commit, snapshot_dst
-         FROM {} WHERE status = 'detected'",
+        "SELECT DISTINCT origin FROM {} WHERE status = 'detected' AND origin > $1
+         ORDER BY origin LIMIT $2",
         tables.altered_histories
     );
-    let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(&q)
+    let rows: Vec<(String,)> = sqlx::query_as(&q)
+        .bind(after)
+        .bind(limit)
         .fetch_all(pool)
         .await
-        .context("Failed to load detected commits")?;
+        .context("Failed to load detected origins page")?;
+
+    Ok(rows.into_iter().map(|(s,)| s).collect())
+}
+
+/// Loads all `detected` commits belonging to the given set of origins.
+/// Keeping the focus computation grouped by whole origins preserves the
+/// per-file semantics of the previous CSV-based pipeline.
+pub async fn load_detected_commits_for_origins(
+    pool: &PgPool,
+    tables: &TableNames,
+    origins: &[String],
+) -> Result<HashSet<(String, String, String, String, String)>> {
+    if origins.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let q = format!(
+        "SELECT origin, snapshot_src, branch_name, missing_commit, snapshot_dst
+         FROM {} WHERE status = 'detected' AND origin = ANY($1::text[])",
+        tables.altered_histories
+    );
+    let origins_ref: Vec<&str> = origins.iter().map(|s| s.as_str()).collect();
+    let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(&q)
+        .bind(&origins_ref)
+        .fetch_all(pool)
+        .await
+        .context("Failed to load detected commits for origins")?;
 
     Ok(rows.into_iter().collect())
 }
 
-pub async fn promote_to_root_cause(
+/// Promotes a batch of root-cause commits to `status = 'root_cause'`, matching
+/// on the full tuple so we never over-promote rows that merely share a
+/// `missing_commit` swhid. Does NOT delete anything: callers should run
+/// `delete_remaining_detected` once, after all batches are processed.
+pub async fn promote_root_cause_batch(
     pool: &PgPool,
     tables: &TableNames,
     root_cause_commits: &HashSet<(String, String, String, String, String)>,
 ) -> Result<()> {
-    let q_update = format!(
-        "UPDATE {} SET status = 'root_cause'
-         WHERE status = 'detected' AND missing_commit = ANY($1::text[])",
-        tables.altered_histories
-    );
-    let q_delete = format!(
-        "DELETE FROM {} WHERE status = 'detected'",
-        tables.altered_histories
+    if root_cause_commits.is_empty() {
+        return Ok(());
+    }
+    let q = format!(
+        "UPDATE {t} AS a SET status = 'root_cause'
+         FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+              AS v(origin, snapshot_src, branch_name, missing_commit, snapshot_dst)
+         WHERE a.status = 'detected'
+           AND a.origin = v.origin
+           AND a.snapshot_src = v.snapshot_src
+           AND a.branch_name = v.branch_name
+           AND a.missing_commit = v.missing_commit
+           AND a.snapshot_dst = v.snapshot_dst",
+        t = tables.altered_histories
     );
 
-    let missing_commits: Vec<&str> = root_cause_commits
-        .iter()
-        .map(|r| r.3.as_str())
-        .collect();
+    let rows: Vec<&(String, String, String, String, String)> =
+        root_cause_commits.iter().collect();
 
-    for chunk in missing_commits.chunks(1000) {
-        let chunk_vec: Vec<&str> = chunk.to_vec();
-        sqlx::query(&q_update)
-            .bind(&chunk_vec)
+    for chunk in rows.chunks(1000) {
+        let mut origins = Vec::with_capacity(chunk.len());
+        let mut snapshot_srcs = Vec::with_capacity(chunk.len());
+        let mut branch_names = Vec::with_capacity(chunk.len());
+        let mut missing_commits = Vec::with_capacity(chunk.len());
+        let mut snapshot_dsts = Vec::with_capacity(chunk.len());
+
+        for r in chunk {
+            origins.push(r.0.as_str());
+            snapshot_srcs.push(r.1.as_str());
+            branch_names.push(r.2.as_str());
+            missing_commits.push(r.3.as_str());
+            snapshot_dsts.push(r.4.as_str());
+        }
+
+        sqlx::query(&q)
+            .bind(&origins)
+            .bind(&snapshot_srcs)
+            .bind(&branch_names)
+            .bind(&missing_commits)
+            .bind(&snapshot_dsts)
             .execute(pool)
             .await
-            .context("Failed to promote commits to root_cause")?;
+            .context("Failed to promote root_cause batch")?;
     }
-
-    sqlx::query(&q_delete)
-        .execute(pool)
-        .await
-        .context("Failed to delete non-root-cause commits")?;
 
     Ok(())
 }
 
-pub async fn load_root_cause_commits(
-    pool: &PgPool,
-    tables: &TableNames,
-) -> Result<Vec<(String, String, String, String, String)>> {
+/// Deletes every remaining `detected` row (i.e. the commits that were not
+/// promoted to root cause). Run once at the end of the focus step.
+pub async fn delete_remaining_detected(pool: &PgPool, tables: &TableNames) -> Result<()> {
     let q = format!(
-        "SELECT origin, snapshot_src, branch_name, missing_commit, snapshot_dst
-         FROM {} WHERE status = 'root_cause'",
+        "DELETE FROM {} WHERE status = 'detected'",
         tables.altered_histories
     );
-    let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(&q)
+    sqlx::query(&q)
+        .execute(pool)
+        .await
+        .context("Failed to delete non-root-cause commits")?;
+    Ok(())
+}
+
+/// Returns the next page of `root_cause` commits with `id > after_id`, ordered
+/// by primary key. Lets the classification step stream the table in bounded
+/// pages instead of loading every root-cause row at once.
+pub async fn load_root_cause_commits_after(
+    pool: &PgPool,
+    tables: &TableNames,
+    after_id: i64,
+    limit: i64,
+) -> Result<Vec<(i64, String, String, String, String, String)>> {
+    let q = format!(
+        "SELECT id, origin, snapshot_src, branch_name, missing_commit, snapshot_dst
+         FROM {} WHERE status = 'root_cause' AND id > $1
+         ORDER BY id LIMIT $2",
+        tables.altered_histories
+    );
+    let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(&q)
+        .bind(after_id)
+        .bind(limit)
         .fetch_all(pool)
         .await
-        .context("Failed to load root_cause commits")?;
+        .context("Failed to load root_cause commits page")?;
 
     Ok(rows)
 }

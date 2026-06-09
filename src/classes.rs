@@ -799,26 +799,40 @@ pub fn categorization_all_from_db(
         .load_labels()
         .expect("Could not load labels");
 
-    let commits = rt
-        .block_on(db::load_root_cause_commits(pool, tables))
-        .expect("Failed to load root_cause commits from DB");
+    let multi_bar = MultiProgress::new();
+    // Page through the root_cause rows by primary key instead of loading them
+    // all at once, which would OOM-kill the process on a full-graph run.
+    let batch = (opts.chunk.max(1) as i64).max(1);
+    let mut after_id: i64 = 0;
+    let mut total_classified: u64 = 0;
 
-    if commits.is_empty() {
-        info!("No root_cause commits to classify -- skipping.");
-        return true;
+    loop {
+        let page = rt
+            .block_on(db::load_root_cause_commits_after(
+                pool, tables, after_id, batch,
+            ))
+            .expect("Failed to load root_cause commits page from DB");
+
+        if page.is_empty() {
+            break;
+        }
+        after_id = page.last().unwrap().0;
+
+        let commits: Vec<(String, String, String, String, String)> = page
+            .into_iter()
+            .map(|(_id, origin, snapshot_src, branch_name, missing_commit, snapshot_dst)| {
+                (origin, snapshot_src, branch_name, missing_commit, snapshot_dst)
+            })
+            .collect();
+
+        let updates = classify_commits(&commits, &graph_t, &multi_bar);
+        total_classified += updates.len() as u64;
+
+        rt.block_on(db::batch_update_classification(pool, tables, &updates))
+            .expect("Failed to batch update classifications in DB");
     }
 
-    info!("Loaded {} root_cause commits from DB for classification", commits.len());
-
-    let multi_bar = MultiProgress::new();
-    let updates = classify_commits(&commits, &graph_t, &multi_bar);
-
-    info!("Classified {} commits, writing to DB", updates.len());
-
-    rt.block_on(db::batch_update_classification(pool, tables, &updates))
-        .expect("Failed to batch update classifications in DB");
-
-    info!("Classification complete.");
+    info!("Classification complete. Classified {} commits", total_classified);
     true
 }
 

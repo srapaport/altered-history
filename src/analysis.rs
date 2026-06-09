@@ -54,25 +54,12 @@ where
     res
 }
 
-/// Load all detected commits from DB, filter to root-cause, then update the DB.
-/// Returns true when done.
 pub fn focus_missing_commits_from_db(
     opts: &env::Options,
     pool: &PgPool,
     rt: &tokio::runtime::Runtime,
     tables: &db::TableNames,
 ) -> bool {
-    let detected = rt
-        .block_on(db::load_detected_commits(pool, tables))
-        .expect("Failed to load detected commits from DB");
-
-    if detected.is_empty() {
-        info!("No detected commits to focus -- skipping.");
-        return true;
-    }
-
-    info!("Loaded {} detected commits from DB", detected.len());
-
     let graph_name: &str = opts.graph.as_str();
     let graph = SwhUnidirectionalGraph::new(PathBuf::from(graph_name))
         .expect("Could not load graph")
@@ -91,16 +78,47 @@ pub fn focus_missing_commits_from_db(
         .expect("Could not load labels");
 
     let multi_bar = MultiProgress::new();
-    let root_cause = focus_missing_commits(&detected, &graph, &multi_bar);
+    // Number of *whole origins* to load per batch. Bounds peak memory to one
+    // batch worth of detected commits, mirroring the old per-file pipeline.
+    let batch_origins = opts.chunk.max(1) as i64;
+    let mut after = String::new();
+    let mut total_detected: u64 = 0;
+    let mut total_root_cause: u64 = 0;
+
+    loop {
+        let origins = rt
+            .block_on(db::load_detected_origins_after(
+                pool,
+                tables,
+                &after,
+                batch_origins,
+            ))
+            .expect("Failed to load detected origins page");
+
+        if origins.is_empty() {
+            break;
+        }
+        after = origins.last().unwrap().clone();
+
+        let detected = rt
+            .block_on(db::load_detected_commits_for_origins(pool, tables, &origins))
+            .expect("Failed to load detected commits for origins");
+        total_detected += detected.len() as u64;
+
+        let root_cause = focus_missing_commits(&detected, &graph, &multi_bar);
+        total_root_cause += root_cause.len() as u64;
+
+        rt.block_on(db::promote_root_cause_batch(pool, tables, &root_cause))
+            .expect("Failed to promote root cause commits batch in DB");
+    }
+
+    rt.block_on(db::delete_remaining_detected(pool, tables))
+        .expect("Failed to delete non-root-cause commits in DB");
 
     info!(
         "Focused to {} root cause commits (from {} detected)",
-        root_cause.len(),
-        detected.len()
+        total_root_cause, total_detected
     );
-
-    rt.block_on(db::promote_to_root_cause(pool, tables, &root_cause))
-        .expect("Failed to promote root cause commits in DB");
 
     true
 }
