@@ -174,6 +174,33 @@ where
     Some(curr_altered_commits)
 }
 
+/// Keep only the root-cause altered commits: a missing commit is a root cause
+/// when none of its successors (parents in the forward graph) are themselves
+/// part of the same origin's missing-commit set. Runs in memory per origin,
+/// mirroring the old per-file focus step.
+/// Tuple layout: (snapshot_src, branch_name, missing_commit, snapshot_dst).
+fn keep_root_cause<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
+    mc: HashSet<(String, String, String, String)>,
+    graph: &G,
+) -> HashSet<(String, String, String, String)>
+where
+    <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
+    <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
+{
+    let rev_only: HashSet<String> = mc.iter().map(|c| c.2.clone()).collect();
+    mc.into_iter()
+        .filter(|c| {
+            let node_id = graph.properties().node_id(c.2.as_str()).unwrap();
+            for succ in graph.successors(node_id) {
+                if rev_only.contains(&graph.properties().swhid(succ).to_string()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
 fn branches_head<G: SwhLabeledForwardGraph + SwhGraphWithProperties>(
     snap_swhid: &String,
     graph: &G,
@@ -452,16 +479,27 @@ pub fn main_all_mpsc_with_cp(
                                         removed_branch,
                                         &graph,
                                     ) {
-                                        info!(
-                                            "Missing commits in {} | with pid: {}",
-                                            ori_swhid, thread_id
-                                        );
-                                        tx.send(Some((
-                                            ori_swhid,
-                                            ori_url,
-                                            Some(curr_altered_commits),
-                                        )))
-                                        .expect("Failed sending the msg");
+                                        // Filter down to root-cause commits in
+                                        // memory while the graph is loaded,
+                                        // so we never persist the (huge) full
+                                        // detected set.
+                                        let root_cause =
+                                            keep_root_cause(curr_altered_commits, &graph);
+                                        if root_cause.is_empty() {
+                                            info!(
+                                                "No root-cause commits in {} | with pid: {}",
+                                                ori_swhid, thread_id
+                                            );
+                                            tx.send(Some((ori_swhid, ori_url, None)))
+                                                .expect("Failed sending the msg");
+                                        } else {
+                                            info!(
+                                                "Missing commits in {} | with pid: {}",
+                                                ori_swhid, thread_id
+                                            );
+                                            tx.send(Some((ori_swhid, ori_url, Some(root_cause))))
+                                                .expect("Failed sending the msg");
+                                        }
                                     } else {
                                         info!(
                                             "No missing commits in {} | with pid: {}",

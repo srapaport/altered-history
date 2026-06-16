@@ -70,13 +70,8 @@ fn main() {
     println!("Main work complete | time elapsed: {:.2?}", start.elapsed());
     info!("Main work complete | time elapsed: {:.2?}", start.elapsed());
 
-    // Step 2: Identify Root Cause Commits
-    let start = Instant::now();
-    if altered_history::analysis::focus_missing_commits_from_db(&opts, &pool, &rt, &tables) {
-        info!("Focus finished!");
-    }
-    println!("Focus complete | time elapsed: {:.2?}", start.elapsed());
-    info!("Focus complete | time elapsed: {:.2?}", start.elapsed());
+    // Step 2 (root-cause filtering) is now performed in-memory per origin
+    // during the main work above, so only root-cause commits are persisted.
 
     // Step 3: Categorize Root Cause Commits
     let start = Instant::now();

@@ -124,8 +124,8 @@ pub async fn batch_insert_altered_commits(
     }
 
     let q = format!(
-        "INSERT INTO {} (origin, snapshot_src, branch_name, missing_commit, snapshot_dst)
-         SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])",
+        "INSERT INTO {} (origin, snapshot_src, branch_name, missing_commit, snapshot_dst, status)
+         SELECT *, 'root_cause' FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])",
         tables.altered_histories
     );
 
