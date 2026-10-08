@@ -24,7 +24,7 @@ where
     <G as SwhGraphWithProperties>::Maps: swh_graph::properties::Maps,
     <G as SwhGraphWithProperties>::LabelNames: swh_graph::properties::LabelNames,
 {
-    let node_id = graph.properties().node_id(rev_swhid).unwrap();
+    let node_id = graph.properties().node_id(rev_swhid).unwrap();    
     for succ in graph.successors(node_id) {
         if graph.properties().node_type(succ) == NodeType::Directory {
             return Some(succ);
